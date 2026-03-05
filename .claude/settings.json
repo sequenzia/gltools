@@ -1,0 +1,8 @@
+{
+  "env": {
+    "CLAUDE_CODE_TASK_LIST_ID": "gltools",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": ["context7"]
+}
