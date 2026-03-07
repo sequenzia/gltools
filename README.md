@@ -687,6 +687,49 @@ src/gltools/
   services/     # Business logic layer (auth, MR, issue, CI)
 ```
 
+### Architecture
+
+The codebase follows a 4-layer architecture with clear separation of concerns:
+
+```mermaid
+flowchart TD
+    subgraph presentation["Presentation Layer"]
+        CLI["CLI (Typer)"]:::primary
+        TUI["TUI (Textual)"]:::primary
+    end
+
+    subgraph services["Service Layer"]
+        SVC["MergeRequestService\nIssueService\nCIService\nAuthService"]:::secondary
+    end
+
+    subgraph client["Client Layer"]
+        GLC["GitLabClient (Facade)"]:::neutral
+        HTTP["GitLabHTTPClient\nRetry + Rate Limit"]:::neutral
+    end
+
+    subgraph data["Data Layer"]
+        MOD["Pydantic Models"]:::success
+        CFG["Config + Keyring"]:::success
+    end
+
+    CLI --> services
+    TUI --> services
+    services --> GLC
+    services --> CFG
+    GLC --> HTTP
+    HTTP --> MOD
+
+    classDef primary fill:#dbeafe,stroke:#2563eb,color:#000
+    classDef secondary fill:#f3e8ff,stroke:#7c3aed,color:#000
+    classDef neutral fill:#f3f4f6,stroke:#6b7280,color:#000
+    classDef success fill:#dcfce7,stroke:#16a34a,color:#000
+```
+
+- **Presentation**: CLI (Typer + Rich) for agents/scripts, TUI (Textual) for interactive use
+- **Services**: Business logic, project resolution, dry-run support
+- **Client**: Async HTTP with retry/rate limiting, typed resource managers
+- **Data**: Pydantic v2 models, output envelopes, TOML config with 4-layer precedence
+
 ### Running from Source
 
 ```bash

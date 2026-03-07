@@ -1,17 +1,17 @@
 # gltools - GitLab CLI & TUI Tool
 
 ## Project Overview
-Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output for agent integration.
+Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output for agent integration. Alpha (v0.1.0), ~51 source files, ~957 tests.
 
 ## Tech Stack
-- **Python 3.12+**, src layout (`src/gltools/`)
+- **Python 3.12+**, src layout (`src/gltools/`), PEP 695 generics, `X | Y` union syntax
 - **Build**: Hatch (hatchling backend), UV for deps
 - **CLI**: Typer with Rich formatting
-- **TUI**: Textual
+- **TUI**: Textual (widget-as-screen pattern, not native Screen stack)
 - **HTTP**: httpx (async), respx for mocking
 - **Models**: Pydantic v2 with `ConfigDict(extra="ignore", populate_by_name=True)`
-- **Config**: Pydantic Settings, TOML (`~/.config/gltools/config.toml`)
-- **Auth**: keyring with file fallback
+- **Config**: Pydantic Settings, TOML (`~/.config/gltools/config.toml`), 4-layer precedence
+- **Auth**: keyring with file fallback (`~/.config/gltools/.token-{profile}`, 600 perms)
 - **Lint**: Ruff (line-length 120, py312 target)
 - **Test**: pytest, pytest-asyncio (auto mode), respx
 
@@ -32,20 +32,52 @@ src/gltools/
 ├── tui/          # Textual app (app.py, commands.py, screens/, widgets/)
 ├── services/     # Business logic (merge_request.py, issue.py, ci.py, auth.py)
 ├── client/       # API layer (http.py, gitlab.py, exceptions.py, managers/)
-├── models/       # Pydantic models (base.py, merge_request.py, issue.py, pipeline.py, job.py, output.py)
+├── models/       # Pydantic models (base.py, merge_request.py, issue.py, pipeline.py, job.py, output.py, user.py)
 ├── config/       # Settings (settings.py, git_remote.py, keyring.py)
 └── plugins/      # Plugin system (protocol.py)
 ```
 
+### Layer Flow
+CLI/TUI → Services → Client (GitLabClient facade → Managers) → GitLabHTTPClient → GitLab API
+
+## Critical Files
+| File | Purpose |
+|------|---------|
+| `cli/app.py` | Root Typer app, global options (`ctx.obj`), `async_command` decorator |
+| `cli/formatting.py` | JSON/text output routing, Rich tables, dry-run display |
+| `cli/mr.py` | 9 MR commands (list/view/create/merge/approve/diff/note/close/reopen/update) |
+| `cli/ci.py` | 8 CI commands (status/list/run/retry/cancel/jobs/logs/artifacts) |
+| `client/http.py` | Async HTTP with retry (3 attempts, exp backoff), rate limiting, pagination, streaming |
+| `client/gitlab.py` | Facade composing 4 resource managers |
+| `client/exceptions.py` | 7-class hierarchy with `_mask_token()` for safe logging |
+| `config/settings.py` | `GitLabConfig` — CLI flags > env vars > TOML profiles > defaults |
+| `models/output.py` | `PaginatedResponse[T]`, `CommandResult`, `DryRunResult`, `ErrorResult` |
+| `models/__init__.py` | Forward ref resolution: `PipelineRef` + `MergeRequest.model_rebuild()` |
+| `services/merge_request.py` | MR business logic, 3-level project resolution, dry-run |
+| `tui/app.py` | Textual app: widget-as-screen routing, keybindings, auth gate |
+
 ## Key Patterns
 - **Entry point**: `gltools = "gltools.cli.app:app"` (Typer app)
-- **Global CLI options**: stored in `ctx.obj` dict
-- **Service layer**: takes GitLabClient + GitLabConfig, resolves project via 3-level precedence
-- **Dry-run**: returns `DryRunResult` without API call
-- **Manager pattern**: takes `GitLabHTTPClient`, uses `_encode_project` helper
-- **Forward refs**: `TYPE_CHECKING` + string annotation + `model_rebuild()` in `__init__.py`
-- **Output envelopes**: `PaginatedResponse[T]`, `CommandResult`, `DryRunResult`, `ErrorResult`
-- **Streaming**: `@asynccontextmanager` wrapping `stream_get()`
+- **Global CLI options**: stored in `ctx.obj` dict (`output_format`, `host`, `token`, `profile`, `quiet`)
+- **`async_command` decorator**: wraps async handlers with `asyncio.run()` for Typer (MR/Issue use it; CI uses inline `asyncio.run()` instead)
+- **`_build_service(ctx)` factory**: each CLI module creates config → client → service; caller does `finally: await client.close()`
+- **Service layer**: takes `GitLabClient` + `GitLabConfig`, resolves project via 3-level precedence (`--project` → `config.default_project` → `detect_gitlab_remote()`)
+- **Dry-run**: service returns `DryRunResult(method, url, body)` without API call; CLI checks `isinstance(result, DryRunResult)`
+- **Manager pattern**: takes `GitLabHTTPClient`, uses `_encode_project()` helper, returns Pydantic models via `model_validate()`
+- **Forward refs**: `PipelineRef` defined in `models/__init__.py` before `MergeRequest` import, then `model_rebuild()` resolves string annotations
+- **Output envelopes**: `PaginatedResponse[T]` (PEP 695), `CommandResult`, `DryRunResult`, `ErrorResult`
+- **Streaming**: `@asynccontextmanager` wrapping `stream_get()` for large payloads (e.g., job logs)
+- **TUI screens**: `Widget` subclasses mounted into `#screen-container` Static slot (not Textual's native `Screen` stack)
+- **TUI navigation**: custom `Message` subclasses (`MRSelected`, `ItemSelected`) for inter-widget communication
+- **TUI async**: `@work(exclusive=True)` and `run_worker()` for non-blocking service calls
+- **Config precedence**: CLI flags > env vars (`GLTOOLS_*`) > TOML file > defaults. Env vars temporarily cleared in `from_config()` to prevent BaseSettings double-application.
+
+## Known Inconsistencies
+- **CI layer**: `CIService` takes `project_id` directly (resolved in CLI) unlike MR/Issue services. CI lacks `--project` flag. CI uses inline `asyncio.run()` instead of `@async_command`.
+- **Duplicate code**: `_handle_gitlab_error()` near-identical in `mr.py` and `issue.py`. `_get_current_branch()` duplicated in `mr.py` and `services/ci.py`. `_encode_project()` duplicated in MR/Issue managers (missing from Pipeline/Job managers).
+- **TUI stubs**: `MRListScreen._load_data()` and `IssueListScreen._load_data()` are stubs (filter collection works, but no service calls).
+- **Auth output**: `auth.py` builds JSON manually instead of using `formatting.py` helpers.
+- **Plugin TUI**: `register_tui_plugins()` exists but is never called from app startup.
 
 ## Ruff Rules to Watch
 - **B904**: re-raise with `from None`
@@ -53,3 +85,12 @@ src/gltools/
 - **UP017**: `datetime.UTC` not `timezone.utc`
 - **UP046**: PEP 695 type syntax for generics
 - **Pydantic**: do NOT use `from __future__ import annotations` in model files
+
+## Test Patterns
+- **conftest.py**: `mock_router` (respx) and `http_client` fixtures
+- **fixtures/responses.py**: factory functions with `_deep_merge()` for test data overrides
+- **TUI tests**: `app.run_test(size=(W,H))` + `pilot.press()` / `pilot.pause()`
+- **Widget isolation**: local `App` subclasses wrapping the widget under test
+- **Service mocking**: `patch()` + `AsyncMock` in dashboard tests
+- **Plugin tests**: mock `entry_points` via `@patch("gltools.plugins.entry_points")`
+- **HTTP tests**: respx `@respx.mock` decorator on async methods
