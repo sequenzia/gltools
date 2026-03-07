@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 from gltools.client.http import GitLabHTTPClient
 from gltools.client.managers import IssueManager, JobManager, MergeRequestManager, PipelineManager
@@ -25,6 +28,8 @@ class GitLabClient:
         host: str,
         token: str,
         *,
+        auth_type: str = "pat",
+        token_refresher: Callable[[], Awaitable[str]] | None = None,
         http_client: GitLabHTTPClient | None = None,
         **http_kwargs: Any,
     ) -> None:
@@ -32,16 +37,24 @@ class GitLabClient:
 
         Args:
             host: GitLab instance URL (e.g., "https://gitlab.com").
-            token: GitLab Personal Access Token.
+            token: GitLab Personal Access Token or OAuth access token.
+            auth_type: Authentication type: 'pat' or 'oauth'.
+            token_refresher: Async callable that returns a new access token on 401.
             http_client: Optional pre-configured HTTP client. If provided,
-                         host, token, and http_kwargs are ignored.
+                         host, token, auth_type, token_refresher, and http_kwargs are ignored.
             **http_kwargs: Additional keyword arguments passed to GitLabHTTPClient
                           (e.g., retry_config, timeout).
         """
         if http_client is not None:
             self._http = http_client
         else:
-            self._http = GitLabHTTPClient(host, token, **http_kwargs)
+            self._http = GitLabHTTPClient(
+                host,
+                token,
+                auth_type=auth_type,
+                token_refresher=token_refresher,
+                **http_kwargs,
+            )
 
         self.merge_requests = MergeRequestManager(self._http)
         self.issues = IssueManager(self._http)

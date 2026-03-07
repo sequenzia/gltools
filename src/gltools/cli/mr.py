@@ -78,9 +78,35 @@ async def _build_service(ctx: typer.Context, project: str | None = None) -> Any:
         },
     )
 
-    client = GitLabClient(host=config.host, token=config.token)
+    token_refresher = _make_token_refresher(config) if config.auth_type == "oauth" and config.client_id else None
+    client = GitLabClient(
+        host=config.host,
+        token=config.token,
+        auth_type=config.auth_type,
+        token_refresher=token_refresher,
+    )
     service = MergeRequestService(client, config, project=project)
     return service, client
+
+
+def _make_token_refresher(config: Any) -> Any:
+    """Build an async token refresher for OAuth clients."""
+
+    async def _refresh() -> str:
+        from gltools.config.keyring import get_refresh_token, store_refresh_token, store_token
+        from gltools.config.oauth import refresh_access_token
+
+        refresh_tok = get_refresh_token(profile=config.profile)
+        if not refresh_tok:
+            raise AuthenticationError("No refresh token. Re-run `gltools auth login --method web`.")
+
+        result = await refresh_access_token(config.host, config.client_id, refresh_tok)
+        store_token(result.access_token, profile=config.profile)
+        if result.refresh_token:
+            store_refresh_token(result.refresh_token, profile=config.profile)
+        return result.access_token
+
+    return _refresh
 
 
 def _handle_dry_run(result: DryRunResult, ctx: typer.Context) -> None:

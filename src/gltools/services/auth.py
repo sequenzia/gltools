@@ -10,6 +10,7 @@ from gltools.config.keyring import (
     _is_keyring_available,
     delete_token,
     get_token,
+    store_refresh_token,
     store_token,
 )
 from gltools.config.settings import (
@@ -32,6 +33,7 @@ class AuthStatus:
     config_file: str | None = None
     token_storage: str | None = None
     profile: str = "default"
+    auth_type: str = "pat"
 
 
 @dataclass
@@ -42,6 +44,7 @@ class LoginResult:
     username: str | None = None
     host: str | None = None
     token_storage: str | None = None
+    auth_type: str = "pat"
     error: str | None = None
 
 
@@ -56,7 +59,7 @@ class AuthService:
         """Current profile name."""
         return self._profile
 
-    async def validate_token(self, host: str, token: str) -> dict[str, Any] | None:
+    async def validate_token(self, host: str, token: str, *, auth_type: str = "pat") -> dict[str, Any] | None:
         """Validate a token by calling GET /user on the GitLab API.
 
         Returns:
@@ -69,7 +72,10 @@ class AuthService:
         from gltools.client.http import GitLabHTTPClient, RetryConfig
 
         client = GitLabHTTPClient(
-            host=host, token=token, retry_config=RetryConfig(max_retries=2, base_delay=0.5)
+            host=host,
+            token=token,
+            auth_type=auth_type,
+            retry_config=RetryConfig(max_retries=2, base_delay=0.5),
         )
         try:
             response = await client.get("/user")
@@ -77,13 +83,9 @@ class AuthService:
         except GitLabAuthError:
             return None
         except GitLabConnError:
-            raise ConnectionError(
-                f"Unable to connect to {host}. Check the URL and your network connection."
-            ) from None
+            raise ConnectionError(f"Unable to connect to {host}. Check the URL and your network connection.") from None
         except GitLabTimeout:
-            raise ConnectionError(
-                f"Connection to {host} timed out. The server may be unreachable."
-            ) from None
+            raise ConnectionError(f"Connection to {host} timed out. The server may be unreachable.") from None
         except GitLabClientError:
             return None
         finally:
@@ -116,17 +118,61 @@ class AuthService:
 
         token_storage = "keyring" if _is_keyring_available() else "config file"
 
-        self._save_host_to_config(host)
+        self._save_profile_config(host, auth_type="pat")
 
         return LoginResult(
             success=True,
             username=username,
             host=host,
             token_storage=token_storage,
+            auth_type="pat",
         )
 
-    def _save_host_to_config(self, host: str) -> None:
-        """Save the host URL to the TOML config file."""
+    async def oauth_login(
+        self,
+        host: str,
+        client_id: str,
+        *,
+        method: str = "web",
+    ) -> LoginResult:
+        """Perform OAuth2 login flow."""
+        from gltools.config.oauth import (
+            OAuthConfig,
+            OAuthError,
+            authorization_code_flow,
+            device_authorization_flow,
+        )
+
+        config = OAuthConfig(client_id=client_id, host=host)
+        try:
+            if method == "device":
+                result = await device_authorization_flow(config)
+            else:
+                result = await authorization_code_flow(config)
+        except OAuthError as exc:
+            return LoginResult(success=False, error=str(exc))
+
+        user_data = await self.validate_token(host, result.access_token, auth_type="oauth")
+        if user_data is None:
+            return LoginResult(success=False, error="OAuth succeeded but token validation failed.")
+
+        store_token(result.access_token, profile=self._profile)
+        if result.refresh_token:
+            store_refresh_token(result.refresh_token, profile=self._profile)
+
+        self._save_profile_config(host, auth_type="oauth", client_id=client_id)
+
+        token_storage = "keyring" if _is_keyring_available() else "config file"
+        return LoginResult(
+            success=True,
+            username=user_data.get("username", "unknown"),
+            host=host,
+            token_storage=token_storage,
+            auth_type="oauth",
+        )
+
+    def _save_profile_config(self, host: str, *, auth_type: str = "pat", client_id: str | None = None) -> None:
+        """Save host, auth_type, and client_id to the TOML config file."""
         config_path = get_config_path()
 
         existing: dict[str, Any] = {}
@@ -142,6 +188,11 @@ class AuthService:
         profiles = existing.get("profiles", {})
         profile_data = profiles.get(self._profile, {})
         profile_data["host"] = host
+        profile_data["auth_type"] = auth_type
+        if client_id:
+            profile_data["client_id"] = client_id
+        elif "client_id" in profile_data:
+            del profile_data["client_id"]
         profiles[self._profile] = profile_data
         existing["profiles"] = profiles
 
@@ -159,6 +210,7 @@ class AuthService:
 
         profile_data = load_profile_from_toml(config_path, self._profile)
         host = profile_data.get("host")
+        auth_type = profile_data.get("auth_type", "pat")
         token = get_token(profile=self._profile)
 
         if not token:
@@ -167,13 +219,14 @@ class AuthService:
                 host=host,
                 config_file=config_file_str,
                 profile=self._profile,
+                auth_type=auth_type,
             )
 
         token_storage = "keyring" if _is_keyring_available() else "config file"
 
         if host:
             try:
-                user_data = await self.validate_token(host, token)
+                user_data = await self.validate_token(host, token, auth_type=auth_type)
                 if user_data:
                     return AuthStatus(
                         authenticated=True,
@@ -183,6 +236,7 @@ class AuthService:
                         config_file=config_file_str,
                         token_storage=token_storage,
                         profile=self._profile,
+                        auth_type=auth_type,
                     )
                 return AuthStatus(
                     authenticated=True,
@@ -191,6 +245,7 @@ class AuthService:
                     config_file=config_file_str,
                     token_storage=token_storage,
                     profile=self._profile,
+                    auth_type=auth_type,
                 )
             except ConnectionError:
                 return AuthStatus(
@@ -200,6 +255,7 @@ class AuthService:
                     config_file=config_file_str,
                     token_storage=token_storage,
                     profile=self._profile,
+                    auth_type=auth_type,
                 )
 
         return AuthStatus(
@@ -209,6 +265,7 @@ class AuthService:
             config_file=config_file_str,
             token_storage=token_storage,
             profile=self._profile,
+            auth_type=auth_type,
         )
 
     def logout(self) -> bool:

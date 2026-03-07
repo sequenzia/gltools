@@ -90,7 +90,7 @@ class TestLogin:
             ),
             patch("gltools.services.auth.store_token") as mock_store,
             patch("gltools.services.auth._is_keyring_available", return_value=True),
-            patch.object(service, "_save_host_to_config"),
+            patch.object(service, "_save_profile_config"),
         ):
             result = await service.login("https://gitlab.com", "glpat-valid")
 
@@ -140,7 +140,7 @@ class TestLogin:
             ),
             patch("gltools.services.auth.store_token"),
             patch("gltools.services.auth._is_keyring_available", return_value=False),
-            patch.object(service, "_save_host_to_config"),
+            patch.object(service, "_save_profile_config"),
         ):
             result = await service.login("https://gitlab.com", "glpat-valid")
 
@@ -160,7 +160,7 @@ class TestLogin:
             ),
             patch("gltools.services.auth.store_token") as mock_store,
             patch("gltools.services.auth._is_keyring_available", return_value=True),
-            patch.object(service, "_save_host_to_config"),
+            patch.object(service, "_save_profile_config"),
         ):
             result = await service.login("https://gitlab.com", "glpat-new")
 
@@ -247,7 +247,205 @@ class TestLogout:
         assert result is False
 
 
-class TestSaveHostToConfig:
+class TestOAuthLogin:
+    """Tests for the OAuth login flow."""
+
+    @pytest.mark.asyncio
+    async def test_successful_oauth_web_login(self) -> None:
+        from gltools.config.oauth import OAuthTokenResponse
+
+        service = AuthService(profile="default")
+        token_resp = OAuthTokenResponse(
+            access_token="oauth-token",
+            token_type="bearer",
+            refresh_token="oauth-refresh",
+            expires_in=7200,
+        )
+
+        with (
+            patch(
+                "gltools.config.oauth.authorization_code_flow",
+                new_callable=AsyncMock,
+                return_value=token_resp,
+            ),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value={"username": "oauthuser", "id": 1},
+            ),
+            patch("gltools.services.auth.store_token") as mock_store,
+            patch("gltools.services.auth.store_refresh_token") as mock_store_refresh,
+            patch("gltools.services.auth._is_keyring_available", return_value=True),
+            patch.object(service, "_save_profile_config"),
+        ):
+            result = await service.oauth_login("https://gitlab.com", "client-id", method="web")
+
+        assert result.success is True
+        assert result.username == "oauthuser"
+        assert result.auth_type == "oauth"
+        mock_store.assert_called_once_with("oauth-token", profile="default")
+        mock_store_refresh.assert_called_once_with("oauth-refresh", profile="default")
+
+    @pytest.mark.asyncio
+    async def test_oauth_login_token_validation_fails(self) -> None:
+        from gltools.config.oauth import OAuthTokenResponse
+
+        service = AuthService(profile="default")
+        token_resp = OAuthTokenResponse(
+            access_token="oauth-token",
+            token_type="bearer",
+        )
+
+        with (
+            patch(
+                "gltools.config.oauth.authorization_code_flow",
+                new_callable=AsyncMock,
+                return_value=token_resp,
+            ),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await service.oauth_login("https://gitlab.com", "client-id")
+
+        assert result.success is False
+        assert "validation failed" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_oauth_login_flow_error(self) -> None:
+        from gltools.config.oauth import OAuthError
+
+        service = AuthService(profile="default")
+
+        with patch(
+            "gltools.config.oauth.authorization_code_flow",
+            new_callable=AsyncMock,
+            side_effect=OAuthError("Browser auth failed"),
+        ):
+            result = await service.oauth_login("https://gitlab.com", "client-id")
+
+        assert result.success is False
+        assert "Browser auth failed" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_oauth_device_flow(self) -> None:
+        from gltools.config.oauth import OAuthTokenResponse
+
+        service = AuthService(profile="default")
+        token_resp = OAuthTokenResponse(
+            access_token="device-token",
+            token_type="bearer",
+            refresh_token="device-refresh",
+            expires_in=7200,
+        )
+
+        with (
+            patch(
+                "gltools.config.oauth.device_authorization_flow",
+                new_callable=AsyncMock,
+                return_value=token_resp,
+            ),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value={"username": "deviceuser", "id": 2},
+            ),
+            patch("gltools.services.auth.store_token"),
+            patch("gltools.services.auth.store_refresh_token"),
+            patch("gltools.services.auth._is_keyring_available", return_value=True),
+            patch.object(service, "_save_profile_config"),
+        ):
+            result = await service.oauth_login("https://gitlab.com", "client-id", method="device")
+
+        assert result.success is True
+        assert result.username == "deviceuser"
+        assert result.auth_type == "oauth"
+
+    @pytest.mark.asyncio
+    async def test_oauth_no_refresh_token(self) -> None:
+        from gltools.config.oauth import OAuthTokenResponse
+
+        service = AuthService(profile="default")
+        token_resp = OAuthTokenResponse(
+            access_token="oauth-token",
+            token_type="bearer",
+            refresh_token=None,
+        )
+
+        with (
+            patch(
+                "gltools.config.oauth.authorization_code_flow",
+                new_callable=AsyncMock,
+                return_value=token_resp,
+            ),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value={"username": "user", "id": 1},
+            ),
+            patch("gltools.services.auth.store_token"),
+            patch("gltools.services.auth.store_refresh_token") as mock_store_refresh,
+            patch("gltools.services.auth._is_keyring_available", return_value=True),
+            patch.object(service, "_save_profile_config"),
+        ):
+            result = await service.oauth_login("https://gitlab.com", "client-id")
+
+        assert result.success is True
+        mock_store_refresh.assert_not_called()
+
+
+class TestGetStatusAuthType:
+    """Tests for auth_type in status output."""
+
+    @pytest.mark.asyncio
+    async def test_status_includes_auth_type(self) -> None:
+        service = AuthService()
+        with (
+            patch("gltools.services.auth.get_config_path"),
+            patch(
+                "gltools.services.auth.load_profile_from_toml",
+                return_value={"host": "https://gitlab.com", "auth_type": "oauth"},
+            ),
+            patch("gltools.services.auth.get_token", return_value="oauth-token"),
+            patch("gltools.services.auth._is_keyring_available", return_value=True),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value={"username": "testuser"},
+            ),
+        ):
+            status = await service.get_status()
+
+        assert status.auth_type == "oauth"
+
+    @pytest.mark.asyncio
+    async def test_status_defaults_to_pat(self) -> None:
+        service = AuthService()
+        with (
+            patch("gltools.services.auth.get_config_path"),
+            patch("gltools.services.auth.load_profile_from_toml", return_value={"host": "https://gitlab.com"}),
+            patch("gltools.services.auth.get_token", return_value="pat-token"),
+            patch("gltools.services.auth._is_keyring_available", return_value=True),
+            patch.object(
+                service,
+                "validate_token",
+                new_callable=AsyncMock,
+                return_value={"username": "testuser"},
+            ),
+        ):
+            status = await service.get_status()
+
+        assert status.auth_type == "pat"
+
+
+class TestSaveProfileConfig:
     """Tests for config file writing."""
 
     def test_saves_host_to_new_config(self, tmp_path: object) -> None:
@@ -259,11 +457,27 @@ class TestSaveHostToConfig:
             patch("gltools.services.auth.get_config_path", return_value=config_path),
             patch("gltools.services.auth.write_config") as mock_write,
         ):
-            service._save_host_to_config("https://gitlab.com")
+            service._save_profile_config("https://gitlab.com")
 
         mock_write.assert_called_once()
         written_content = mock_write.call_args[0][1]
         assert "https://gitlab.com" in written_content
+        assert "pat" in written_content
+
+    def test_saves_oauth_config(self, tmp_path: object) -> None:
+        from pathlib import Path
+
+        config_path = Path(str(tmp_path)) / "config.toml"
+        service = AuthService(profile="default")
+        with (
+            patch("gltools.services.auth.get_config_path", return_value=config_path),
+            patch("gltools.services.auth.write_config") as mock_write,
+        ):
+            service._save_profile_config("https://gitlab.com", auth_type="oauth", client_id="abc123")
+
+        written_content = mock_write.call_args[0][1]
+        assert "oauth" in written_content
+        assert "abc123" in written_content
 
     def test_preserves_existing_profiles(self, tmp_path: object) -> None:
         from pathlib import Path
@@ -274,9 +488,8 @@ class TestSaveHostToConfig:
 
         service = AuthService(profile="default")
         with patch("gltools.services.auth.get_config_path", return_value=config_path):
-            # Need to also patch write_config to not actually write
             with patch("gltools.services.auth.write_config") as mock_write:
-                service._save_host_to_config("https://gitlab.com")
+                service._save_profile_config("https://gitlab.com")
 
             written_content = mock_write.call_args[0][1]
             assert "work" in written_content

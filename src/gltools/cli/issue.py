@@ -54,9 +54,37 @@ async def _build_service(ctx: typer.Context, project: str | None = None) -> Any:
         },
     )
 
-    client = GitLabClient(host=config.host, token=config.token)
+    token_refresher = _make_token_refresher(config) if config.auth_type == "oauth" and config.client_id else None
+    client = GitLabClient(
+        host=config.host,
+        token=config.token,
+        auth_type=config.auth_type,
+        token_refresher=token_refresher,
+    )
     service = IssueService(client, config, project=project)
     return service, client
+
+
+def _make_token_refresher(config: Any) -> Any:
+    """Build an async token refresher for OAuth clients."""
+
+    async def _refresh() -> str:
+        from gltools.config.keyring import get_refresh_token, store_refresh_token, store_token
+        from gltools.config.oauth import refresh_access_token
+
+        refresh_tok = get_refresh_token(profile=config.profile)
+        if not refresh_tok:
+            from gltools.client.exceptions import AuthenticationError
+
+            raise AuthenticationError("No refresh token. Re-run `gltools auth login --method web`.")
+
+        result = await refresh_access_token(config.host, config.client_id, refresh_tok)
+        store_token(result.access_token, profile=config.profile)
+        if result.refresh_token:
+            store_refresh_token(result.refresh_token, profile=config.profile)
+        return result.access_token
+
+    return _refresh
 
 
 def _handle_dry_run(result: DryRunResult, ctx: typer.Context) -> None:
@@ -72,9 +100,7 @@ def _handle_error(msg: str, ctx: typer.Context, *, code: int | None = None) -> N
     raise typer.Exit(1)
 
 
-def _handle_gitlab_error(
-    exc: GitLabClientError, ctx: typer.Context, issue_iid: int | None = None
-) -> None:
+def _handle_gitlab_error(exc: GitLabClientError, ctx: typer.Context, issue_iid: int | None = None) -> None:
     """Handle a GitLab client error with appropriate messaging."""
     if isinstance(exc, NotFoundError):
         if issue_iid is not None:
@@ -166,9 +192,7 @@ async def issue_list(
     labels: str | None = typer.Option(None, "--labels", "-l", help="Comma-separated labels to filter by."),
     assignee: str | None = typer.Option(None, "--assignee", help="Filter by assignee username."),
     milestone: str | None = typer.Option(None, "--milestone", help="Filter by milestone title."),
-    scope: str | None = typer.Option(
-        None, "--scope", help="Filter scope (created_by_me, assigned_to_me, all)."
-    ),
+    scope: str | None = typer.Option(None, "--scope", help="Filter scope (created_by_me, assigned_to_me, all)."),
     search: str | None = typer.Option(None, "--search", help="Search in title and description."),
     per_page: int = typer.Option(20, "--per-page", help="Items per page."),
     page: int = typer.Option(1, "--page", help="Page number."),
@@ -249,8 +273,7 @@ async def issue_update(
 
     if not fields and not dry_run:
         _handle_error(
-            "No fields to update. Use --title, --description, --labels, --assignee-ids, "
-            "--milestone-id, or --due-date.",
+            "No fields to update. Use --title, --description, --labels, --assignee-ids, --milestone-id, or --due-date.",
             ctx,
         )
         return

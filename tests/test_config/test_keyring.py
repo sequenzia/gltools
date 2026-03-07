@@ -50,9 +50,7 @@ class TestStoreToken:
             patch("gltools.config.keyring._delete_token_file") as mock_del,
         ):
             store_token("glpat-abc123", profile="default")
-            mock_kr.set_password.assert_called_once_with(
-                SERVICE_NAME, "token:default", "glpat-abc123"
-            )
+            mock_kr.set_password.assert_called_once_with(SERVICE_NAME, "token:default", "glpat-abc123")
             mock_del.assert_called_once_with("default")
 
     def test_falls_back_to_file_when_keyring_unavailable(self, tmp_path: object) -> None:
@@ -141,11 +139,12 @@ class TestDeleteToken:
             patch("gltools.config.keyring._is_keyring_available", return_value=True),
             patch("gltools.config.keyring.keyring") as mock_kr,
             patch("gltools.config.keyring._delete_token_file", return_value=False),
+            patch("gltools.config.keyring._delete_file", return_value=False),
         ):
-            mock_kr.get_password.return_value = "glpat-abc123"
+            mock_kr.get_password.side_effect = lambda svc, key: "glpat-abc123" if key == "token:default" else None
             result = delete_token(profile="default")
             assert result is True
-            mock_kr.delete_password.assert_called_once_with(SERVICE_NAME, "token:default")
+            mock_kr.delete_password.assert_any_call(SERVICE_NAME, "token:default")
 
     def test_deletes_file_fallback(self) -> None:
         with (
@@ -235,6 +234,127 @@ class TestFileStorage:
 
             assert result == "secret-token"
             assert "permissions" in caplog.text.lower()
+
+
+class TestRefreshTokenKeyringKey:
+    """Tests for refresh token keyring key generation."""
+
+    def test_default_profile(self) -> None:
+        from gltools.config.keyring import _refresh_token_keyring_key
+
+        assert _refresh_token_keyring_key("default") == "refresh_token:default"
+
+    def test_custom_profile(self) -> None:
+        from gltools.config.keyring import _refresh_token_keyring_key
+
+        assert _refresh_token_keyring_key("work") == "refresh_token:work"
+
+
+class TestRefreshTokenFilePath:
+    """Tests for refresh token file path generation."""
+
+    def test_default_profile_path(self) -> None:
+        from gltools.config.keyring import _refresh_token_file_path
+
+        with patch("gltools.config.keyring.get_config_dir", return_value=pytest.importorskip("pathlib").Path("/fake")):
+            path = _refresh_token_file_path("default")
+            assert path.name == ".refresh-token-default"
+
+
+class TestStoreRefreshToken:
+    """Tests for storing refresh tokens."""
+
+    def test_stores_in_keyring_when_available(self) -> None:
+        from gltools.config.keyring import store_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=True),
+            patch("gltools.config.keyring.keyring") as mock_kr,
+            patch("gltools.config.keyring._delete_file") as mock_del,
+        ):
+            store_refresh_token("refresh-tok", profile="default")
+            mock_kr.set_password.assert_called_once_with(SERVICE_NAME, "refresh_token:default", "refresh-tok")
+            mock_del.assert_called_once()
+
+    def test_falls_back_to_file_when_keyring_unavailable(self) -> None:
+        from gltools.config.keyring import store_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=False),
+            patch("gltools.config.keyring._write_file") as mock_write,
+        ):
+            store_refresh_token("refresh-tok", profile="default")
+            mock_write.assert_called_once()
+
+
+class TestGetRefreshToken:
+    """Tests for retrieving refresh tokens."""
+
+    def test_retrieves_from_keyring(self) -> None:
+        from gltools.config.keyring import get_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=True),
+            patch("gltools.config.keyring.keyring") as mock_kr,
+        ):
+            mock_kr.get_password.return_value = "refresh-tok"
+            result = get_refresh_token(profile="default")
+            assert result == "refresh-tok"
+            mock_kr.get_password.assert_called_once_with(SERVICE_NAME, "refresh_token:default")
+
+    def test_returns_none_when_no_token(self) -> None:
+        from gltools.config.keyring import get_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=True),
+            patch("gltools.config.keyring.keyring") as mock_kr,
+            patch("gltools.config.keyring._read_file", return_value=None),
+        ):
+            mock_kr.get_password.return_value = None
+            result = get_refresh_token(profile="default")
+            assert result is None
+
+
+class TestDeleteRefreshToken:
+    """Tests for deleting refresh tokens."""
+
+    def test_deletes_from_keyring(self) -> None:
+        from gltools.config.keyring import delete_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=True),
+            patch("gltools.config.keyring.keyring") as mock_kr,
+            patch("gltools.config.keyring._delete_file", return_value=False),
+        ):
+            mock_kr.get_password.return_value = "refresh-tok"
+            result = delete_refresh_token(profile="default")
+            assert result is True
+            mock_kr.delete_password.assert_called_once_with(SERVICE_NAME, "refresh_token:default")
+
+    def test_returns_false_when_nothing_to_delete(self) -> None:
+        from gltools.config.keyring import delete_refresh_token
+
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=True),
+            patch("gltools.config.keyring.keyring") as mock_kr,
+            patch("gltools.config.keyring._delete_file", return_value=False),
+        ):
+            mock_kr.get_password.return_value = None
+            result = delete_refresh_token(profile="default")
+            assert result is False
+
+
+class TestDeleteTokenCleansUpRefresh:
+    """Verify that delete_token also removes refresh tokens."""
+
+    def test_delete_token_calls_delete_refresh_token(self) -> None:
+        with (
+            patch("gltools.config.keyring._is_keyring_available", return_value=False),
+            patch("gltools.config.keyring._delete_token_file", return_value=True),
+            patch("gltools.config.keyring.delete_refresh_token") as mock_del_refresh,
+        ):
+            delete_token(profile="default")
+            mock_del_refresh.assert_called_once_with(profile="default")
 
 
 class TestTokenNeverLogged:

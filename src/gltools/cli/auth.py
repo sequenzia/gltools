@@ -44,44 +44,79 @@ def _output_error_json(error: str, code: int | None = None) -> None:
 
 
 @auth_app.command(name="login")
-def login(ctx: typer.Context) -> None:
+def login(
+    ctx: typer.Context,
+    method: str = typer.Option(
+        "pat",
+        "--method",
+        "-m",
+        help="Authentication method: 'pat' (token), 'web' (browser OAuth), or 'device' (device code OAuth).",
+    ),
+) -> None:
     """Interactive setup flow: configure host, validate token, store credentials."""
     profile = _get_profile(ctx)
     use_json = _is_json(ctx)
 
     host = typer.prompt("GitLab host URL", default=DEFAULT_HOST)
-    token = typer.prompt("Personal access token", hide_input=True)
-
-    if not token.strip():
-        if use_json:
-            _output_error_json("Token cannot be empty.")
-        else:
-            err_console.print("[bold red]Error:[/bold red] Token cannot be empty.")
-        raise typer.Exit(1)
 
     service = AuthService(profile=profile)
 
-    if not use_json:
-        console.print(f"Validating token against {host}...")
+    if method == "pat":
+        token = typer.prompt("Personal access token", hide_input=True)
 
-    result = asyncio.run(service.login(host, token.strip()))
+        if not token.strip():
+            if use_json:
+                _output_error_json("Token cannot be empty.")
+            else:
+                err_console.print("[bold red]Error:[/bold red] Token cannot be empty.")
+            raise typer.Exit(1)
+
+        if not use_json:
+            console.print(f"Validating token against {host}...")
+
+        result = asyncio.run(service.login(host, token.strip()))
+
+    elif method in ("web", "device"):
+        client_id = typer.prompt("OAuth Application ID (from GitLab Settings > Applications)")
+
+        if not client_id.strip():
+            if use_json:
+                _output_error_json("Application ID cannot be empty.")
+            else:
+                err_console.print("[bold red]Error:[/bold red] Application ID cannot be empty.")
+            raise typer.Exit(1)
+
+        if not use_json:
+            if method == "web":
+                console.print("Opening browser for authentication...")
+            else:
+                console.print("Starting device authorization flow...")
+
+        result = asyncio.run(service.oauth_login(host, client_id.strip(), method=method))
+
+    else:
+        if use_json:
+            _output_error_json(f"Unknown method '{method}'. Use 'pat', 'web', or 'device'.")
+        else:
+            err_console.print(f"[bold red]Error:[/bold red] Unknown method '{method}'. Use 'pat', 'web', or 'device'.")
+        raise typer.Exit(1)
 
     if result.success:
         if use_json:
-            _output_json({
-                "status": "success",
-                "data": {
-                    "username": result.username,
-                    "host": result.host,
-                    "profile": profile,
-                    "token_storage": result.token_storage,
-                },
-            })
-        else:
-            console.print(
-                f"[green]Authenticated as [bold]{result.username}[/bold] "
-                f"on {result.host}[/green]"
+            _output_json(
+                {
+                    "status": "success",
+                    "data": {
+                        "username": result.username,
+                        "host": result.host,
+                        "profile": profile,
+                        "token_storage": result.token_storage,
+                        "auth_type": result.auth_type,
+                    },
+                }
             )
+        else:
+            console.print(f"[green]Authenticated as [bold]{result.username}[/bold] on {result.host}[/green]")
             console.print(f"[dim]Token stored in {result.token_storage} (profile: {profile})[/dim]")
     else:
         if use_json:
@@ -102,40 +137,43 @@ def status(ctx: typer.Context) -> None:
 
     if not auth_status.authenticated:
         if use_json:
-            _output_json({
-                "status": "success",
-                "data": {
-                    "authenticated": False,
-                    "profile": auth_status.profile,
-                    "config_file": auth_status.config_file,
-                },
-            })
-        else:
-            err_console.print(
-                "[yellow]Not authenticated.[/yellow] "
-                "Run `gltools auth login` to set up."
+            _output_json(
+                {
+                    "status": "success",
+                    "data": {
+                        "authenticated": False,
+                        "profile": auth_status.profile,
+                        "config_file": auth_status.config_file,
+                    },
+                }
             )
+        else:
+            err_console.print("[yellow]Not authenticated.[/yellow] Run `gltools auth login` to set up.")
         raise typer.Exit(1)
 
     if use_json:
-        _output_json({
-            "status": "success",
-            "data": {
-                "authenticated": True,
-                "host": auth_status.host,
-                "username": auth_status.username,
-                "token_valid": auth_status.token_valid,
-                "config_file": auth_status.config_file,
-                "token_storage": auth_status.token_storage,
-                "profile": auth_status.profile,
-            },
-        })
+        _output_json(
+            {
+                "status": "success",
+                "data": {
+                    "authenticated": True,
+                    "host": auth_status.host,
+                    "username": auth_status.username,
+                    "token_valid": auth_status.token_valid,
+                    "config_file": auth_status.config_file,
+                    "token_storage": auth_status.token_storage,
+                    "profile": auth_status.profile,
+                    "auth_type": auth_status.auth_type,
+                },
+            }
+        )
     else:
         console.print(f"[bold]Profile:[/bold] {auth_status.profile}")
         console.print(f"[bold]Host:[/bold] {auth_status.host or '-'}")
         console.print(f"[bold]Username:[/bold] {auth_status.username or '-'}")
         valid_str = "[green]valid[/green]" if auth_status.token_valid else "[red]invalid[/red]"
         console.print(f"[bold]Token:[/bold] {valid_str}")
+        console.print(f"[bold]Auth type:[/bold] {auth_status.auth_type}")
         console.print(f"[bold]Storage:[/bold] {auth_status.token_storage}")
         console.print(f"[bold]Config:[/bold] {auth_status.config_file}")
 
@@ -151,26 +189,29 @@ def logout(ctx: typer.Context) -> None:
 
     if deleted:
         if use_json:
-            _output_json({
-                "status": "success",
-                "data": {
-                    "message": "Credentials removed.",
-                    "profile": profile,
-                },
-            })
+            _output_json(
+                {
+                    "status": "success",
+                    "data": {
+                        "message": "Credentials removed.",
+                        "profile": profile,
+                    },
+                }
+            )
         else:
             console.print(f"[green]Credentials removed for profile '{profile}'.[/green]")
     else:
         if use_json:
-            _output_json({
-                "status": "success",
-                "data": {
-                    "message": "No credentials found.",
-                    "profile": profile,
-                },
-            })
+            _output_json(
+                {
+                    "status": "success",
+                    "data": {
+                        "message": "No credentials found.",
+                        "profile": profile,
+                    },
+                }
+            )
         else:
             console.print(
-                f"[yellow]No credentials found for profile '{profile}'.[/yellow] "
-                "Run `gltools auth login` to set up."
+                f"[yellow]No credentials found for profile '{profile}'.[/yellow] Run `gltools auth login` to set up."
             )

@@ -107,9 +107,7 @@ def load_profile_from_toml(
 
     if strict and not profile_data and profiles:
         available = sorted(profiles.keys())
-        raise ProfileNotFoundError(
-            f"Profile '{profile_name}' not found. Available profiles: {', '.join(available)}"
-        )
+        raise ProfileNotFoundError(f"Profile '{profile_name}' not found. Available profiles: {', '.join(available)}")
 
     # Return only known fields, ignoring unknown ones for forward compatibility
     return {k: v for k, v in profile_data.items() if isinstance(v, str | None)}
@@ -130,6 +128,8 @@ class GitLabConfig(BaseSettings):
     default_project: str | None = Field(default=None, description="Default project path (e.g., group/project)")
     output_format: str = Field(default="text", description="Output format: 'json' or 'text'")
     profile: str = Field(default="default", description="Configuration profile name")
+    auth_type: str = Field(default="pat", description="Authentication type: 'pat' or 'oauth'")
+    client_id: str | None = Field(default=None, description="OAuth2 application client_id")
 
     model_config = {
         "env_prefix": "GLTOOLS_",
@@ -175,17 +175,13 @@ class GitLabConfig(BaseSettings):
 
         # Determine profile: CLI override > env var > default
         effective_profile = (
-            (cli_overrides or {}).get("profile")
-            or profile
-            or os.environ.get("GLTOOLS_PROFILE", "default")
+            (cli_overrides or {}).get("profile") or profile or os.environ.get("GLTOOLS_PROFILE", "default")
         )
 
         # Layer 3: Config file values
         # Use strict mode when the profile was explicitly specified (not default)
         explicitly_requested = effective_profile != "default"
-        file_values = load_profile_from_toml(
-            config_path, effective_profile, strict=explicitly_requested
-        )
+        file_values = load_profile_from_toml(config_path, effective_profile, strict=explicitly_requested)
         file_values["profile"] = effective_profile
 
         # Layer 2: Environment variables

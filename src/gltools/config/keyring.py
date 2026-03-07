@@ -59,13 +59,9 @@ def store_token(token: str, *, profile: str = "default") -> None:
             logger.debug("Token stored in system keyring for profile '%s'", profile)
             return
     except (KeyringError, NoKeyringError):
-        logger.warning(
-            "Cannot access system keyring. Token will be stored in config file."
-        )
+        logger.warning("Cannot access system keyring. Token will be stored in config file.")
     except Exception:
-        logger.warning(
-            "Unexpected keyring error. Token will be stored in config file."
-        )
+        logger.warning("Unexpected keyring error. Token will be stored in config file.")
 
     _write_token_file(token, profile)
 
@@ -85,19 +81,17 @@ def get_token(*, profile: str = "default") -> str | None:
             if token is not None:
                 return token
     except (KeyringError, NoKeyringError):
-        logger.warning(
-            "Cannot access system keyring. Falling back to config file."
-        )
+        logger.warning("Cannot access system keyring. Falling back to config file.")
     except Exception:
-        logger.warning(
-            "Unexpected keyring error. Falling back to config file."
-        )
+        logger.warning("Unexpected keyring error. Falling back to config file.")
 
     return _read_token_file(profile)
 
 
 def delete_token(*, profile: str = "default") -> bool:
     """Delete a stored token from both keyring and file storage.
+
+    Also removes any stored refresh token for the profile.
 
     Args:
         profile: Configuration profile name.
@@ -115,61 +109,128 @@ def delete_token(*, profile: str = "default") -> bool:
                 deleted = True
                 logger.debug("Token deleted from system keyring for profile '%s'", profile)
     except (KeyringError, NoKeyringError):
-        logger.warning(
-            "Cannot access system keyring for token deletion."
-        )
+        logger.warning("Cannot access system keyring for token deletion.")
     except Exception:
-        logger.warning(
-            "Unexpected keyring error during token deletion."
-        )
+        logger.warning("Unexpected keyring error during token deletion.")
 
     if _delete_token_file(profile):
+        deleted = True
+
+    # Clean up refresh token as well
+    delete_refresh_token(profile=profile)
+
+    return deleted
+
+
+def _refresh_token_keyring_key(profile: str) -> str:
+    """Return the keyring username key for refresh tokens scoped to a profile."""
+    return f"refresh_token:{profile}"
+
+
+def _refresh_token_file_path(profile: str) -> Path:
+    """Return the path for file-based refresh token storage for a profile."""
+    return get_config_dir() / f".refresh-token-{profile}"
+
+
+def store_refresh_token(token: str, *, profile: str = "default") -> None:
+    """Store a refresh token, preferring the system keyring with file fallback."""
+    try:
+        if _is_keyring_available():
+            keyring.set_password(SERVICE_NAME, _refresh_token_keyring_key(profile), token)
+            _delete_file(_refresh_token_file_path(profile))
+            logger.debug("Refresh token stored in system keyring for profile '%s'", profile)
+            return
+    except (KeyringError, NoKeyringError):
+        logger.warning("Cannot access system keyring. Refresh token will be stored in config file.")
+    except Exception:
+        logger.warning("Unexpected keyring error. Refresh token will be stored in config file.")
+
+    _write_file(_refresh_token_file_path(profile), token)
+
+
+def get_refresh_token(*, profile: str = "default") -> str | None:
+    """Retrieve a stored refresh token, checking keyring first then file fallback."""
+    try:
+        if _is_keyring_available():
+            token = keyring.get_password(SERVICE_NAME, _refresh_token_keyring_key(profile))
+            if token is not None:
+                return token
+    except (KeyringError, NoKeyringError):
+        logger.warning("Cannot access system keyring. Falling back to config file.")
+    except Exception:
+        logger.warning("Unexpected keyring error. Falling back to config file.")
+
+    return _read_file(_refresh_token_file_path(profile))
+
+
+def delete_refresh_token(*, profile: str = "default") -> bool:
+    """Delete a stored refresh token from both keyring and file storage."""
+    deleted = False
+    try:
+        if _is_keyring_available():
+            existing = keyring.get_password(SERVICE_NAME, _refresh_token_keyring_key(profile))
+            if existing is not None:
+                keyring.delete_password(SERVICE_NAME, _refresh_token_keyring_key(profile))
+                deleted = True
+                logger.debug("Refresh token deleted from system keyring for profile '%s'", profile)
+    except (KeyringError, NoKeyringError):
+        logger.warning("Cannot access system keyring for refresh token deletion.")
+    except Exception:
+        logger.warning("Unexpected keyring error during refresh token deletion.")
+
+    if _delete_file(_refresh_token_file_path(profile)):
         deleted = True
 
     return deleted
 
 
+def _write_file(path: Path, content: str) -> None:
+    """Write content to a file with 600 permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def _read_file(path: Path) -> str | None:
+    """Read content from a file, returning None if missing."""
+    if not path.is_file():
+        return None
+
+    try:
+        file_stat = path.stat()
+        mode = file_stat.st_mode & 0o777
+        if mode != 0o600:
+            logger.warning(
+                "Token file %s has permissions %o, expected 600. Run: chmod 600 %s",
+                path,
+                mode,
+                path,
+            )
+    except OSError:
+        pass
+
+    return path.read_text(encoding="utf-8").strip()
+
+
+def _delete_file(path: Path) -> bool:
+    """Delete a file if it exists. Returns True if deleted."""
+    if path.is_file():
+        path.unlink()
+        return True
+    return False
+
+
 def _write_token_file(token: str, profile: str) -> None:
     """Write a token to a file with 600 permissions."""
-    token_path = _token_file_path(profile)
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(token, encoding="utf-8")
-    token_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    _write_file(_token_file_path(profile), token)
     logger.debug("Token stored in config file for profile '%s'", profile)
 
 
 def _read_token_file(profile: str) -> str | None:
     """Read a token from the file-based fallback storage."""
-    token_path = _token_file_path(profile)
-    if not token_path.is_file():
-        return None
-
-    # Warn if file permissions are too open
-    try:
-        file_stat = token_path.stat()
-        mode = file_stat.st_mode & 0o777
-        if mode != 0o600:
-            logger.warning(
-                "Token file %s has permissions %o, expected 600. "
-                "Run: chmod 600 %s",
-                token_path,
-                mode,
-                token_path,
-            )
-    except OSError:
-        pass
-
-    return token_path.read_text(encoding="utf-8").strip()
+    return _read_file(_token_file_path(profile))
 
 
 def _delete_token_file(profile: str) -> bool:
-    """Delete the file-based token if it exists.
-
-    Returns:
-        True if the file existed and was deleted.
-    """
-    token_path = _token_file_path(profile)
-    if token_path.is_file():
-        token_path.unlink()
-        return True
-    return False
+    """Delete the file-based token if it exists."""
+    return _delete_file(_token_file_path(profile))

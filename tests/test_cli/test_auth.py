@@ -301,6 +301,172 @@ class TestAuthLogout:
         mock_cls.assert_called_once_with(profile="work")
 
 
+class TestAuthLoginOAuth:
+    """Tests for `gltools auth login --method web/device`."""
+
+    def test_login_oauth_web_success(self) -> None:
+        login_result = LoginResult(
+            success=True,
+            username="oauthuser",
+            host="https://gitlab.com",
+            token_storage="keyring",
+            auth_type="oauth",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.oauth_login = AsyncMock(return_value=login_result)
+
+            result = runner.invoke(
+                app,
+                ["auth", "login", "--method", "web"],
+                input="https://gitlab.com\nclient-id-123\n",
+            )
+
+        assert result.exit_code == 0
+        assert "oauthuser" in result.output
+        mock_service.oauth_login.assert_awaited_once_with("https://gitlab.com", "client-id-123", method="web")
+
+    def test_login_oauth_device_success(self) -> None:
+        login_result = LoginResult(
+            success=True,
+            username="deviceuser",
+            host="https://gitlab.com",
+            token_storage="keyring",
+            auth_type="oauth",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.oauth_login = AsyncMock(return_value=login_result)
+
+            result = runner.invoke(
+                app,
+                ["auth", "login", "--method", "device"],
+                input="https://gitlab.com\nclient-id-123\n",
+            )
+
+        assert result.exit_code == 0
+        assert "deviceuser" in result.output
+        mock_service.oauth_login.assert_awaited_once_with("https://gitlab.com", "client-id-123", method="device")
+
+    def test_login_oauth_failure(self) -> None:
+        login_result = LoginResult(
+            success=False,
+            error="Authentication timed out. Try again.",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.oauth_login = AsyncMock(return_value=login_result)
+
+            result = runner.invoke(
+                app,
+                ["auth", "login", "--method", "web"],
+                input="https://gitlab.com\nclient-id-123\n",
+            )
+
+        assert result.exit_code == 1
+        assert "timed out" in result.output
+
+    def test_login_oauth_json_output(self) -> None:
+        login_result = LoginResult(
+            success=True,
+            username="oauthuser",
+            host="https://gitlab.com",
+            token_storage="keyring",
+            auth_type="oauth",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.oauth_login = AsyncMock(return_value=login_result)
+
+            result = runner.invoke(
+                app,
+                ["--json", "auth", "login", "--method", "web"],
+                input="https://gitlab.com\nclient-id-123\n",
+            )
+
+        assert result.exit_code == 0
+        assert '"auth_type"' in result.output
+        assert '"oauth"' in result.output
+
+    def test_login_unknown_method(self) -> None:
+        result = runner.invoke(
+            app,
+            ["auth", "login", "--method", "unknown"],
+            input="https://gitlab.com\n",
+        )
+        assert result.exit_code == 1
+        assert "Unknown method" in result.output
+
+    def test_login_pat_method_works_like_default(self) -> None:
+        login_result = LoginResult(
+            success=True,
+            username="patuser",
+            host="https://gitlab.com",
+            token_storage="keyring",
+            auth_type="pat",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.login = AsyncMock(return_value=login_result)
+
+            result = runner.invoke(
+                app,
+                ["auth", "login", "--method", "pat"],
+                input="https://gitlab.com\nglpat-test\n",
+            )
+
+        assert result.exit_code == 0
+        assert "patuser" in result.output
+        mock_service.login.assert_awaited_once()
+
+
+class TestAuthStatusAuthType:
+    """Tests for auth_type in status output."""
+
+    def test_status_shows_auth_type_oauth(self) -> None:
+        auth_status = AuthStatus(
+            authenticated=True,
+            host="https://gitlab.com",
+            username="oauthuser",
+            token_valid=True,
+            config_file="/home/user/.config/gltools/config.toml",
+            token_storage="keyring",
+            profile="default",
+            auth_type="oauth",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.get_status = AsyncMock(return_value=auth_status)
+
+            result = runner.invoke(app, ["auth", "status"])
+
+        assert result.exit_code == 0
+        assert "oauth" in result.output
+
+    def test_status_json_includes_auth_type(self) -> None:
+        import json
+
+        auth_status = AuthStatus(
+            authenticated=True,
+            host="https://gitlab.com",
+            username="oauthuser",
+            token_valid=True,
+            config_file="/home/user/.config/gltools/config.toml",
+            token_storage="keyring",
+            profile="default",
+            auth_type="oauth",
+        )
+        with patch("gltools.cli.auth.AuthService") as mock_cls:
+            mock_service = mock_cls.return_value
+            mock_service.get_status = AsyncMock(return_value=auth_status)
+
+            result = runner.invoke(app, ["--json", "auth", "status"])
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["data"]["auth_type"] == "oauth"
+
+
 class TestAuthLoginEdgeCases:
     """Edge case tests for auth login."""
 

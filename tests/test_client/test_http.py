@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 import respx
@@ -107,9 +109,7 @@ class TestHTTPMethods:
 
     @respx.mock
     async def test_post(self, client: GitLabHTTPClient, base_url: str) -> None:
-        respx.post(f"{base_url}/projects/1/merge_requests").mock(
-            return_value=httpx.Response(201, json={"iid": 42})
-        )
+        respx.post(f"{base_url}/projects/1/merge_requests").mock(return_value=httpx.Response(201, json={"iid": 42}))
         response = await client.post("/projects/1/merge_requests", title="New MR", source_branch="feature")
         assert response.status_code == 201
         assert response.json() == {"iid": 42}
@@ -124,9 +124,7 @@ class TestHTTPMethods:
 
     @respx.mock
     async def test_delete(self, client: GitLabHTTPClient, base_url: str) -> None:
-        respx.delete(f"{base_url}/projects/1/merge_requests/42").mock(
-            return_value=httpx.Response(204)
-        )
+        respx.delete(f"{base_url}/projects/1/merge_requests/42").mock(return_value=httpx.Response(204))
         response = await client.delete("/projects/1/merge_requests/42")
         assert response.status_code == 204
 
@@ -138,9 +136,7 @@ class TestStreaming:
     @respx.mock
     async def test_stream_get_yields_chunks(self, client: GitLabHTTPClient, base_url: str) -> None:
         content = b"line1\nline2\nline3\n"
-        respx.get(f"{base_url}/projects/1/jobs/10/trace").mock(
-            return_value=httpx.Response(200, content=content)
-        )
+        respx.get(f"{base_url}/projects/1/jobs/10/trace").mock(return_value=httpx.Response(200, content=content))
         chunks: list[bytes] = []
         async with client.stream_get("/projects/1/jobs/10/trace") as stream:
             async for chunk in stream:
@@ -233,9 +229,7 @@ class TestRateLimiting:
 
     @respx.mock
     async def test_429_exhausted_retries_raises_rate_limit_error(self, client: GitLabHTTPClient, base_url: str) -> None:
-        respx.get(f"{base_url}/test").mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "0.01"})
-        )
+        respx.get(f"{base_url}/test").mock(return_value=httpx.Response(429, headers={"Retry-After": "0.01"}))
         with pytest.raises(RateLimitError):
             await client.get("/test")
 
@@ -345,9 +339,7 @@ class TestStreamingErrorHandling:
 
     @respx.mock
     async def test_stream_get_429_raises_rate_limit(self, client: GitLabHTTPClient, base_url: str) -> None:
-        respx.get(f"{base_url}/test").mock(
-            return_value=httpx.Response(429, headers={"Retry-After": "30"})
-        )
+        respx.get(f"{base_url}/test").mock(return_value=httpx.Response(429, headers={"Retry-After": "30"}))
         with pytest.raises(RateLimitError):
             async with client.stream_get("/test") as stream:
                 async for _ in stream:
@@ -360,6 +352,135 @@ class TestStreamingErrorHandling:
             async with client.stream_get("/test") as stream:
                 async for _ in stream:
                     pass
+
+
+# --- OAuth Bearer auth ---
+
+
+class TestBearerAuth:
+    @respx.mock
+    async def test_sends_bearer_header_for_oauth(self, base_url: str) -> None:
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="oauth-access-token",
+            auth_type="oauth",
+            retry_config=RetryConfig(max_retries=0),
+        )
+        route = respx.get(f"{base_url}/test").mock(return_value=httpx.Response(200, json={}))
+        await client.get("/test")
+        assert route.called
+        request = route.calls[0].request
+        assert request.headers["Authorization"] == "Bearer oauth-access-token"
+        assert "PRIVATE-TOKEN" not in request.headers
+        await client.close()
+
+    @respx.mock
+    async def test_sends_private_token_for_pat(self, base_url: str) -> None:
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="glpat-test",
+            auth_type="pat",
+            retry_config=RetryConfig(max_retries=0),
+        )
+        route = respx.get(f"{base_url}/test").mock(return_value=httpx.Response(200, json={}))
+        await client.get("/test")
+        request = route.calls[0].request
+        assert request.headers["PRIVATE-TOKEN"] == "glpat-test"
+        assert "Authorization" not in request.headers
+        await client.close()
+
+    @respx.mock
+    async def test_default_auth_type_is_pat(self, base_url: str) -> None:
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="glpat-test",
+            retry_config=RetryConfig(max_retries=0),
+        )
+        route = respx.get(f"{base_url}/test").mock(return_value=httpx.Response(200, json={}))
+        await client.get("/test")
+        request = route.calls[0].request
+        assert "PRIVATE-TOKEN" in request.headers
+        await client.close()
+
+
+class TestTokenRefreshOn401:
+    @respx.mock
+    async def test_refreshes_token_on_401(self, base_url: str) -> None:
+        refresher = AsyncMock(return_value="new-token")
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="expired-token",
+            auth_type="oauth",
+            token_refresher=refresher,
+            retry_config=RetryConfig(max_retries=0),
+        )
+
+        route = respx.get(f"{base_url}/test")
+        route.side_effect = [
+            httpx.Response(401),
+            httpx.Response(200, json={"ok": True}),
+        ]
+
+        response = await client.get("/test")
+        assert response.status_code == 200
+        refresher.assert_awaited_once()
+        # Second request should use new token
+        second_request = route.calls[1].request
+        assert second_request.headers["Authorization"] == "Bearer new-token"
+        await client.close()
+
+    @respx.mock
+    async def test_refresh_only_once_per_request(self, base_url: str) -> None:
+        refresher = AsyncMock(return_value="still-bad-token")
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="expired-token",
+            auth_type="oauth",
+            token_refresher=refresher,
+            retry_config=RetryConfig(max_retries=0),
+        )
+
+        # Both responses are 401
+        respx.get(f"{base_url}/test").mock(return_value=httpx.Response(401))
+
+        with pytest.raises(AuthenticationError):
+            await client.get("/test")
+
+        # Refresher called once, then gave up
+        refresher.assert_awaited_once()
+        await client.close()
+
+    @respx.mock
+    async def test_no_refresher_raises_immediately(self, base_url: str) -> None:
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="expired-token",
+            auth_type="oauth",
+            retry_config=RetryConfig(max_retries=0),
+        )
+
+        respx.get(f"{base_url}/test").mock(return_value=httpx.Response(401))
+
+        with pytest.raises(AuthenticationError):
+            await client.get("/test")
+        await client.close()
+
+    @respx.mock
+    async def test_refresh_failure_raises_auth_error(self, base_url: str) -> None:
+        refresher = AsyncMock(side_effect=RuntimeError("refresh failed"))
+        client = GitLabHTTPClient(
+            host="https://gitlab.example.com",
+            token="expired-token",
+            auth_type="oauth",
+            token_refresher=refresher,
+            retry_config=RetryConfig(max_retries=0),
+        )
+
+        respx.get(f"{base_url}/test").mock(return_value=httpx.Response(401))
+
+        with pytest.raises(AuthenticationError):
+            await client.get("/test")
+        await client.close()
 
 
 # --- Context manager ---

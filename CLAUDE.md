@@ -1,7 +1,7 @@
 # gltools - GitLab CLI & TUI Tool
 
 ## Project Overview
-Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output for agent integration. Alpha (v0.1.0), ~51 source files, ~957 tests.
+Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output for agent integration. Alpha (v0.1.0), ~52 source files, ~1012 tests.
 
 ## Tech Stack
 - **Python 3.12+**, src layout (`src/gltools/`), PEP 695 generics, `X | Y` union syntax
@@ -11,7 +11,7 @@ Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output f
 - **HTTP**: httpx (async), respx for mocking
 - **Models**: Pydantic v2 with `ConfigDict(extra="ignore", populate_by_name=True)`
 - **Config**: Pydantic Settings, TOML (`~/.config/gltools/config.toml`), 4-layer precedence
-- **Auth**: keyring with file fallback (`~/.config/gltools/.token-{profile}`, 600 perms)
+- **Auth**: PAT + OAuth2 (Authorization Code + PKCE, Device Grant); keyring with file fallback (600 perms)
 - **Lint**: Ruff (line-length 120, py312 target)
 - **Test**: pytest, pytest-asyncio (auto mode), respx
 
@@ -33,7 +33,7 @@ src/gltools/
 ├── services/     # Business logic (merge_request.py, issue.py, ci.py, auth.py)
 ├── client/       # API layer (http.py, gitlab.py, exceptions.py, managers/)
 ├── models/       # Pydantic models (base.py, merge_request.py, issue.py, pipeline.py, job.py, output.py, user.py)
-├── config/       # Settings (settings.py, git_remote.py, keyring.py)
+├── config/       # Settings (settings.py, git_remote.py, keyring.py, oauth.py)
 └── plugins/      # Plugin system (protocol.py)
 ```
 
@@ -50,7 +50,8 @@ CLI/TUI → Services → Client (GitLabClient facade → Managers) → GitLabHTT
 | `client/http.py` | Async HTTP with retry (3 attempts, exp backoff), rate limiting, pagination, streaming |
 | `client/gitlab.py` | Facade composing 4 resource managers |
 | `client/exceptions.py` | 7-class hierarchy with `_mask_token()` for safe logging |
-| `config/settings.py` | `GitLabConfig` — CLI flags > env vars > TOML profiles > defaults |
+| `config/settings.py` | `GitLabConfig` — CLI flags > env vars > TOML profiles > defaults. Includes `auth_type` and `client_id` fields. |
+| `config/oauth.py` | OAuth2 protocol: PKCE, callback server, device flow, token exchange, refresh |
 | `models/output.py` | `PaginatedResponse[T]`, `CommandResult`, `DryRunResult`, `ErrorResult` |
 | `models/__init__.py` | Forward ref resolution: `PipelineRef` + `MergeRequest.model_rebuild()` |
 | `services/merge_request.py` | MR business logic, 3-level project resolution, dry-run |
@@ -71,10 +72,15 @@ CLI/TUI → Services → Client (GitLabClient facade → Managers) → GitLabHTT
 - **TUI navigation**: custom `Message` subclasses (`MRSelected`, `ItemSelected`) for inter-widget communication
 - **TUI async**: `@work(exclusive=True)` and `run_worker()` for non-blocking service calls
 - **Config precedence**: CLI flags > env vars (`GLTOOLS_*`) > TOML file > defaults. Env vars temporarily cleared in `from_config()` to prevent BaseSettings double-application.
+- **OAuth2 auth**: `--method web` (Authorization Code + PKCE) and `--method device` (Device Grant). Default `--method pat` for backward compat.
+- **Bearer vs PAT**: `GitLabHTTPClient` switches between `Authorization: Bearer` and `PRIVATE-TOKEN` based on `auth_type` param.
+- **Token refresh**: `token_refresher` callback on `GitLabHTTPClient` transparently refreshes OAuth tokens on 401 (once per request, outside retry budget).
+- **Refresh tokens**: Stored via `store_refresh_token()`/`get_refresh_token()` in keyring.py, cleaned up on `delete_token()`.
+- **`_make_token_refresher(config)`**: Helper in each CLI module (mr.py, issue.py, ci.py) that builds the refresh callback from config.
 
 ## Known Inconsistencies
 - **CI layer**: `CIService` takes `project_id` directly (resolved in CLI) unlike MR/Issue services. CI lacks `--project` flag. CI uses inline `asyncio.run()` instead of `@async_command`.
-- **Duplicate code**: `_handle_gitlab_error()` near-identical in `mr.py` and `issue.py`. `_get_current_branch()` duplicated in `mr.py` and `services/ci.py`. `_encode_project()` duplicated in MR/Issue managers (missing from Pipeline/Job managers).
+- **Duplicate code**: `_handle_gitlab_error()` near-identical in `mr.py` and `issue.py`. `_get_current_branch()` duplicated in `mr.py` and `services/ci.py`. `_encode_project()` duplicated in MR/Issue managers (missing from Pipeline/Job managers). `_make_token_refresher()` duplicated in `mr.py`, `issue.py`, `ci.py`.
 - **TUI stubs**: `MRListScreen._load_data()` and `IssueListScreen._load_data()` are stubs (filter collection works, but no service calls).
 - **Auth output**: `auth.py` builds JSON manually instead of using `formatting.py` helpers.
 - **Plugin TUI**: `register_tui_plugins()` exists but is never called from app startup.

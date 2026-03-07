@@ -66,7 +66,13 @@ def _build_service(ctx: typer.Context) -> Any:
         },
     )
 
-    client = GitLabClient(host=config.host, token=config.token)
+    token_refresher = _make_token_refresher(config) if config.auth_type == "oauth" and config.client_id else None
+    client = GitLabClient(
+        host=config.host,
+        token=config.token,
+        auth_type=config.auth_type,
+        token_refresher=token_refresher,
+    )
 
     # Resolve project
     project: str | None = config.default_project
@@ -88,6 +94,26 @@ def _build_service(ctx: typer.Context) -> Any:
         mr_manager=client.merge_requests,
     )
     return service, client
+
+
+def _make_token_refresher(config: Any) -> Any:
+    """Build an async token refresher for OAuth clients."""
+
+    async def _refresh() -> str:
+        from gltools.config.keyring import get_refresh_token, store_refresh_token, store_token
+        from gltools.config.oauth import refresh_access_token
+
+        refresh_tok = get_refresh_token(profile=config.profile)
+        if not refresh_tok:
+            raise AuthenticationError("No refresh token. Re-run `gltools auth login --method web`.")
+
+        result = await refresh_access_token(config.host, config.client_id, refresh_tok)
+        store_token(result.access_token, profile=config.profile)
+        if result.refresh_token:
+            store_refresh_token(result.refresh_token, profile=config.profile)
+        return result.access_token
+
+    return _refresh
 
 
 def _output_dry_run(result: DryRunResult, ctx_obj: dict[str, Any]) -> None:
@@ -169,9 +195,7 @@ def _handle_error(err: Exception, ctx_obj: dict[str, Any]) -> None:
             error="Unable to connect to GitLab. Check your network connection and the configured host URL."
         )
     elif isinstance(err, GitLabTimeoutError):
-        error_result = ErrorResult(
-            error="Request timed out. The server may be slow or unreachable. Try again later."
-        )
+        error_result = ErrorResult(error="Request timed out. The server may be slow or unreachable. Try again later.")
     elif isinstance(err, (RateLimitError, ServerError)):
         error_result = ErrorResult(error=str(err))
     else:

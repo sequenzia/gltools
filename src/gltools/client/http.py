@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -82,12 +82,16 @@ class GitLabHTTPClient:
         host: str,
         token: str,
         *,
+        auth_type: str = "pat",
+        token_refresher: Callable[[], Awaitable[str]] | None = None,
         retry_config: RetryConfig | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._host = host.rstrip("/")
         self._base_url = f"{self._host}/api/v4"
         self._token = token
+        self._auth_type = auth_type
+        self._token_refresher = token_refresher
         self._retry_config = retry_config or RetryConfig()
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
@@ -99,12 +103,14 @@ class GitLabHTTPClient:
 
     def _build_client(self) -> httpx.AsyncClient:
         """Build and return a new httpx.AsyncClient with configured defaults."""
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if self._auth_type == "oauth":
+            headers["Authorization"] = f"Bearer {self._token}"
+        else:
+            headers["PRIVATE-TOKEN"] = self._token
         return httpx.AsyncClient(
             base_url=self._base_url,
-            headers={
-                "PRIVATE-TOKEN": self._token,
-                "Accept": "application/json",
-            },
+            headers=headers,
             timeout=httpx.Timeout(self._timeout),
         )
 
@@ -145,8 +151,10 @@ class GitLabHTTPClient:
         client = await self._ensure_client()
         last_exception: Exception | None = None
         max_attempts = self._retry_config.max_retries + 1
+        refreshed = False
+        attempt = 0
 
-        for attempt in range(max_attempts):
+        while attempt < max_attempts:
             try:
                 self._safe_log(
                     logging.DEBUG,
@@ -176,6 +184,7 @@ class GitLabHTTPClient:
                             max_attempts,
                         )
                         await asyncio.sleep(delay)
+                        attempt += 1
                         continue
                     raise RateLimitError(
                         retry_after=self._parse_retry_after(response),
@@ -194,11 +203,22 @@ class GitLabHTTPClient:
                             max_attempts,
                         )
                         await asyncio.sleep(delay)
+                        attempt += 1
                         continue
                     raise ServerError(response.status_code, response.text)
 
-                # Handle client errors
+                # Handle client errors — try token refresh on 401 (separate from retry budget)
                 if response.status_code == 401:
+                    if self._token_refresher is not None and not refreshed:
+                        try:
+                            self._token = await self._token_refresher()
+                            await self.close()
+                            self._client = None
+                            client = await self._ensure_client()
+                            refreshed = True
+                            continue  # retry without incrementing attempt
+                        except Exception:
+                            pass
                     raise AuthenticationError()
 
                 if response.status_code == 403:
@@ -225,10 +245,10 @@ class GitLabHTTPClient:
                         max_attempts,
                     )
                     await asyncio.sleep(delay)
+                    attempt += 1
                     continue
                 raise TimeoutError(
-                    "Connection timed out. The host may be offline or unreachable. "
-                    "Check the configured host URL."
+                    "Connection timed out. The host may be offline or unreachable. Check the configured host URL."
                 ) from exc
 
             except httpx.TimeoutException as exc:
@@ -243,6 +263,7 @@ class GitLabHTTPClient:
                         max_attempts,
                     )
                     await asyncio.sleep(delay)
+                    attempt += 1
                     continue
                 raise TimeoutError() from exc
 
@@ -261,9 +282,7 @@ class GitLabHTTPClient:
                 raise
 
             except httpx.HTTPError as exc:
-                raise ConnectionError(
-                    f"HTTP error communicating with GitLab: {type(exc).__name__}"
-                ) from exc
+                raise ConnectionError(f"HTTP error communicating with GitLab: {type(exc).__name__}") from exc
 
         # Should not reach here, but just in case
         if last_exception is not None:
@@ -404,6 +423,4 @@ class GitLabHTTPClient:
         ):
             raise
         except httpx.HTTPError as exc:
-            raise ConnectionError(
-                f"HTTP error during streaming: {type(exc).__name__}"
-            ) from exc
+            raise ConnectionError(f"HTTP error during streaming: {type(exc).__name__}") from exc
