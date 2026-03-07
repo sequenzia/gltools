@@ -2,81 +2,77 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
+from gltools.client.exceptions import (
+    AuthenticationError as GitLabAuthError,
+)
+from gltools.client.exceptions import (
+    ConnectionError as GitLabConnError,
+)
+from gltools.client.exceptions import (
+    TimeoutError as GitLabTimeout,
+)
 from gltools.services.auth import AuthService
 
 
 class TestValidateToken:
     """Tests for token validation against GitLab API."""
 
+    def _mock_client(self, **kwargs: object) -> MagicMock:
+        """Create a mock GitLabHTTPClient with async get/close."""
+        client = MagicMock()
+        client.get = AsyncMock(**kwargs)
+        client.close = AsyncMock()
+        return client
+
     @pytest.mark.asyncio
     async def test_valid_token_returns_user_data(self) -> None:
         service = AuthService()
-        mock_response = httpx.Response(
-            200,
-            json={"id": 1, "username": "testuser", "name": "Test User"},
-            request=httpx.Request("GET", "https://gitlab.com/api/v4/user"),
-        )
-        with patch("gltools.services.auth.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"id": 1, "username": "testuser", "name": "Test User"}
 
+        client = self._mock_client(return_value=mock_response)
+        with patch("gltools.client.http.GitLabHTTPClient", return_value=client):
             result = await service.validate_token("https://gitlab.com", "glpat-valid")
 
         assert result is not None
         assert result["username"] == "testuser"
+        client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_invalid_token_returns_none(self) -> None:
         service = AuthService()
-        mock_response = httpx.Response(
-            401,
-            json={"message": "401 Unauthorized"},
-            request=httpx.Request("GET", "https://gitlab.com/api/v4/user"),
-        )
-        with patch("gltools.services.auth.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
+        client = self._mock_client(side_effect=GitLabAuthError())
+        with patch("gltools.client.http.GitLabHTTPClient", return_value=client):
             result = await service.validate_token("https://gitlab.com", "glpat-bad")
 
         assert result is None
+        client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_connect_error_raises_connection_error(self) -> None:
         service = AuthService()
-        with patch("gltools.services.auth.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = httpx.ConnectError("Connection refused")
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(ConnectionError, match="Unable to connect"):
-                await service.validate_token("https://gitlab.bad", "glpat-test")
+        client = self._mock_client(side_effect=GitLabConnError())
+        with (
+            patch("gltools.client.http.GitLabHTTPClient", return_value=client),
+            pytest.raises(ConnectionError, match="Unable to connect"),
+        ):
+            await service.validate_token("https://gitlab.bad", "glpat-test")
+        client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_timeout_raises_connection_error(self) -> None:
         service = AuthService()
-        with patch("gltools.services.auth.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = httpx.ReadTimeout("timed out")
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(ConnectionError, match="timed out"):
-                await service.validate_token("https://gitlab.com", "glpat-test")
+        client = self._mock_client(side_effect=GitLabTimeout())
+        with (
+            patch("gltools.client.http.GitLabHTTPClient", return_value=client),
+            pytest.raises(ConnectionError, match="timed out"),
+        ):
+            await service.validate_token("https://gitlab.com", "glpat-test")
+        client.close.assert_awaited_once()
 
 
 class TestLogin:

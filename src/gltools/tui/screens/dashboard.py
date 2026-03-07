@@ -185,9 +185,8 @@ class DashboardScreen(Widget):
         Returns a (client, token) tuple, or None if authentication is missing.
         """
         from gltools.client.gitlab import GitLabClient
-        from gltools.config.keyring import get_token
 
-        token = self._config.token or get_token(profile=self._config.profile)
+        token = self._config.token
         if not token:
             return None
 

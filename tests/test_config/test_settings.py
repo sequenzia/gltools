@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -40,6 +42,13 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(os.environ):
         if key.startswith("GLTOOLS_"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def mock_keyring_get_token() -> object:
+    """Prevent from_config() from querying the real keyring during tests."""
+    with patch("gltools.config.keyring.get_token", return_value=None) as m:
+        yield m
 
 
 # --- Default Values ---
@@ -327,3 +336,88 @@ class TestErrorHandling:
         """Token defaults to empty string; callers should validate before API calls."""
         config = GitLabConfig()
         assert config.token == ""
+
+
+# --- Keyring Fallback ---
+
+
+class TestKeyringFallback:
+    """Test that from_config() falls back to keyring when no token is provided."""
+
+    def test_keyring_token_used_when_no_other_source(
+        self, config_file: Path, mock_keyring_get_token: object
+    ) -> None:
+        mock_keyring_get_token.return_value = "kr-token"  # type: ignore[union-attr]
+        config = GitLabConfig.from_config(config_path=config_file)
+        assert config.token == "kr-token"
+
+    def test_cli_token_overrides_keyring(
+        self, config_file: Path, mock_keyring_get_token: object
+    ) -> None:
+        mock_keyring_get_token.return_value = "kr-token"  # type: ignore[union-attr]
+        config = GitLabConfig.from_config(
+            config_path=config_file,
+            cli_overrides={"token": "cli-token"},
+        )
+        assert config.token == "cli-token"
+
+    def test_env_token_overrides_keyring(
+        self, config_file: Path, monkeypatch: pytest.MonkeyPatch, mock_keyring_get_token: object
+    ) -> None:
+        mock_keyring_get_token.return_value = "kr-token"  # type: ignore[union-attr]
+        monkeypatch.setenv("GLTOOLS_TOKEN", "env-token")
+        config = GitLabConfig.from_config(config_path=config_file)
+        assert config.token == "env-token"
+
+    def test_file_token_overrides_keyring(
+        self, config_file: Path, mock_keyring_get_token: object
+    ) -> None:
+        mock_keyring_get_token.return_value = "kr-token"  # type: ignore[union-attr]
+        config_file.write_text('[profiles.default]\ntoken = "file-token"\n')
+        config = GitLabConfig.from_config(config_path=config_file)
+        assert config.token == "file-token"
+
+    def test_keyring_returns_none_keeps_empty(self, config_file: Path) -> None:
+        config = GitLabConfig.from_config(config_path=config_file)
+        assert config.token == ""
+
+    def test_keyring_called_with_correct_profile(
+        self, config_file: Path, mock_keyring_get_token: object
+    ) -> None:
+        config_file.write_text(
+            '[profiles.default]\nhost = "https://gitlab.com"\n\n'
+            '[profiles.work]\nhost = "https://work.gitlab.com"\n'
+        )
+        GitLabConfig.from_config(config_path=config_file, profile="work")
+        mock_keyring_get_token.assert_called_with(profile="work")  # type: ignore[union-attr]
+
+
+# --- Thread Safety ---
+
+
+class TestThreadSafety:
+    """Test that from_config() is thread-safe."""
+
+    def test_from_config_is_thread_safe(
+        self, config_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_file.write_text('[profiles.default]\nhost = "https://gitlab.com"\n')
+        monkeypatch.setenv("GLTOOLS_TOKEN", "thread-token")
+
+        errors: list[Exception] = []
+
+        def call_from_config() -> GitLabConfig:
+            try:
+                return GitLabConfig.from_config(config_path=config_file)
+            except Exception as exc:
+                errors.append(exc)
+                raise
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(call_from_config) for _ in range(20)]
+            results = [f.result() for f in futures]
+
+        assert not errors
+        for config in results:
+            assert config.token == "thread-token"
+            assert config.host == "https://gitlab.com"

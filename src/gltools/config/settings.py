@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import os
 import stat
+import threading
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
+
+_from_config_lock = threading.Lock()
 
 
 def get_config_dir() -> Path:
@@ -205,19 +208,28 @@ class GitLabConfig(BaseSettings):
         merged.update(env_values)
         merged.update(active_cli)
 
+        # Keyring fallback: if no token from file/env/CLI, try the keyring
+        if not merged.get("token"):
+            from gltools.config.keyring import get_token
+
+            keyring_token = get_token(profile=effective_profile)
+            if keyring_token:
+                merged["token"] = keyring_token
+
         # Temporarily clear GLTOOLS_* env vars so BaseSettings.__init__
         # doesn't re-read them (we already handled them above).
-        saved_env: dict[str, str] = {}
-        for field_name in cls.model_fields:
-            env_key = f"{env_prefix}{field_name.upper()}"
-            if env_key in os.environ:
-                saved_env[env_key] = os.environ.pop(env_key)
+        # Lock protects against concurrent threads seeing missing env vars.
+        with _from_config_lock:
+            saved_env: dict[str, str] = {}
+            for field_name in cls.model_fields:
+                env_key = f"{env_prefix}{field_name.upper()}"
+                if env_key in os.environ:
+                    saved_env[env_key] = os.environ.pop(env_key)
 
-        try:
-            config = cls(**merged)
-        finally:
-            # Restore env vars
-            os.environ.update(saved_env)
+            try:
+                config = cls(**merged)
+            finally:
+                os.environ.update(saved_env)
 
         return config
 

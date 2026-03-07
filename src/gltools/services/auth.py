@@ -6,8 +6,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from gltools.config.keyring import (
     _is_keyring_available,
     delete_token,
@@ -64,30 +62,32 @@ class AuthService:
         Returns:
             User data dict on success, None on failure.
         """
-        url = f"{host.rstrip('/')}/api/v4/user"
+        from gltools.client.exceptions import AuthenticationError as GitLabAuthError
+        from gltools.client.exceptions import ConnectionError as GitLabConnError
+        from gltools.client.exceptions import GitLabClientError
+        from gltools.client.exceptions import TimeoutError as GitLabTimeout
+        from gltools.client.http import GitLabHTTPClient, RetryConfig
+
+        client = GitLabHTTPClient(
+            host=host, token=token, retry_config=RetryConfig(max_retries=2, base_delay=0.5)
+        )
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-                response = await client.get(
-                    url,
-                    headers={"PRIVATE-TOKEN": token},
-                )
-                if response.status_code == 200:
-                    return response.json()
-                if response.status_code == 401:
-                    return None
-                return None
-        except httpx.ConnectError:
+            response = await client.get("/user")
+            return response.json()
+        except GitLabAuthError:
+            return None
+        except GitLabConnError:
             raise ConnectionError(
                 f"Unable to connect to {host}. Check the URL and your network connection."
             ) from None
-        except httpx.TimeoutException:
+        except GitLabTimeout:
             raise ConnectionError(
                 f"Connection to {host} timed out. The server may be unreachable."
             ) from None
-        except httpx.HTTPError as exc:
-            raise ConnectionError(
-                f"Network error connecting to {host}: {type(exc).__name__}"
-            ) from None
+        except GitLabClientError:
+            return None
+        finally:
+            await client.close()
 
     async def login(self, host: str, token: str) -> LoginResult:
         """Validate token, store credentials, and save config.

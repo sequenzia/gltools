@@ -6,7 +6,6 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, LoadingIndicator, Static
 
-from gltools.config.keyring import get_token
 from gltools.config.settings import GitLabConfig
 from gltools.tui.commands import GLToolsProvider
 from gltools.tui.screens.dashboard import DashboardScreen
@@ -172,7 +171,7 @@ class GLToolsApp(App[None]):
 
     def on_mount(self) -> None:
         self.sub_title = self._config.host
-        token = self._config.token or get_token(profile=self._config.profile)
+        token = self._config.token
         self._auth_available = bool(token)
 
         if not self._auth_available:
