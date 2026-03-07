@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
 
     from gltools.models import Issue
+
+logger = logging.getLogger(__name__)
 
 
 # Sort key options for Issue list
@@ -229,16 +232,43 @@ class IssueListScreen(Widget):
 
     @work(exclusive=True)
     async def _load_data(self) -> None:
-        """Load issue data from the service layer.
+        """Load issue data from the IssueService."""
+        from gltools.client.gitlab import GitLabClient
+        from gltools.services.issue import IssueService
 
-        This is a stub that will be connected to the IssueService
-        when the service integration is wired up. For now, it hides the
-        loading indicator and shows the empty table.
-        """
-        loading = self.query_one("#issue-loading", LoadingIndicator)
-        loading.display = False
-        table = self.query_one("#issue-table", DataTable)
-        table.display = True
+        token = self._config.token
+        if not token:
+            self.query_one("#issue-loading", LoadingIndicator).display = False
+            self.app.notify("Authentication not configured", severity="error")
+            return
+
+        client = GitLabClient(host=self._config.host, token=token)
+        try:
+            service = IssueService(client, self._config)
+            filters = self.get_filters()
+            state = filters["state"] if filters["state"] != "all" else None
+            response = await service.list_issues(
+                state=state,
+                labels=filters["labels"],
+                assignee=filters["author"],
+                milestone=filters["milestone"],
+                search=filters["search"],
+                per_page=filters["per_page"],
+                page=filters["page"],
+            )
+            self.populate_table(
+                response.items,
+                total=response.total,
+                page=response.page,
+                total_pages=response.total_pages,
+            )
+        except Exception as exc:
+            logger.exception("Failed to load issues")
+            self.query_one("#issue-loading", LoadingIndicator).display = False
+            self.query_one("#issue-table", DataTable).display = True
+            self.app.notify(f"Failed to load issues: {exc}", severity="error")
+        finally:
+            await client.close()
 
     def populate_table(self, issues: list[Issue], total: int = 0, page: int = 1, total_pages: int = 1) -> None:
         """Populate the DataTable with issue data.

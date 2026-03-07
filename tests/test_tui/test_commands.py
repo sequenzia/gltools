@@ -114,14 +114,14 @@ class TestGLToolsProviderIntegration:
     @pytest.mark.asyncio
     async def test_command_palette_navigate_to_mr(self) -> None:
         """Executing 'Go to Merge Requests' from palette should switch screen."""
-        from gltools.tui.app import MergeRequestScreen
+        from gltools.tui.screens.mr_list import MRListScreen
 
         app = GLToolsApp(config=_make_config())
         async with app.run_test(size=(80, 24)) as pilot:
             # Use action directly since testing palette search is fragile
             app.action_switch_screen("mr")
             await pilot.pause()
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
 
     @pytest.mark.asyncio
     async def test_no_auth_hides_auth_commands(self) -> None:
@@ -148,9 +148,9 @@ class TestRefreshView:
             app._refresh_current_view()
             await pilot.pause()
             # Should still be on MR screen after refresh
-            from gltools.tui.app import MergeRequestScreen
+            from gltools.tui.screens.mr_list import MRListScreen
 
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
 
     @pytest.mark.asyncio
     async def test_refresh_no_op_without_auth(self) -> None:

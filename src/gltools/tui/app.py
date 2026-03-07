@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer, Header, LoadingIndicator, Static
+from textual.widgets import Footer, Header, Static
 
 from gltools.config.settings import GitLabConfig
 from gltools.tui.commands import GLToolsProvider
+from gltools.tui.screens.ci_status import CIStatusScreen
 from gltools.tui.screens.dashboard import DashboardScreen
+from gltools.tui.screens.issue_list import IssueListScreen
+from gltools.tui.screens.mr_list import MRListScreen
 
 
 class AuthRequiredScreen(Static):
@@ -21,84 +24,6 @@ class AuthRequiredScreen(Static):
             "  Run 'gltools auth login' to authenticate first.\n\n"
             "  Press 'q' to quit.\n",
             id="auth-required-message",
-        )
-
-
-class MergeRequestScreen(Static):
-    """Merge request list screen."""
-
-    DEFAULT_CSS = """
-    MergeRequestScreen {
-        height: 1fr;
-        padding: 1 2;
-    }
-    """
-
-    def __init__(self, config: GitLabConfig) -> None:
-        super().__init__()
-        self._config = config
-
-    def compose(self) -> ComposeResult:
-        yield Static("Merge Requests", id="mr-title")
-        yield LoadingIndicator(id="mr-loading")
-
-    def on_mount(self) -> None:
-        loading_indicator = self.query_one("#mr-loading", LoadingIndicator)
-        loading_indicator.display = False
-        self.query_one("#mr-title", Static).update(
-            f"Merge Requests\n\n  Host: {self._config.host}\n  Loading merge requests..."
-        )
-
-
-class IssueScreen(Static):
-    """Issue list screen."""
-
-    DEFAULT_CSS = """
-    IssueScreen {
-        height: 1fr;
-        padding: 1 2;
-    }
-    """
-
-    def __init__(self, config: GitLabConfig) -> None:
-        super().__init__()
-        self._config = config
-
-    def compose(self) -> ComposeResult:
-        yield Static("Issues", id="issue-title")
-        yield LoadingIndicator(id="issue-loading")
-
-    def on_mount(self) -> None:
-        loading_indicator = self.query_one("#issue-loading", LoadingIndicator)
-        loading_indicator.display = False
-        self.query_one("#issue-title", Static).update(
-            f"Issues\n\n  Host: {self._config.host}\n  Loading issues..."
-        )
-
-
-class CIScreen(Static):
-    """CI/CD pipeline status screen."""
-
-    DEFAULT_CSS = """
-    CIScreen {
-        height: 1fr;
-        padding: 1 2;
-    }
-    """
-
-    def __init__(self, config: GitLabConfig) -> None:
-        super().__init__()
-        self._config = config
-
-    def compose(self) -> ComposeResult:
-        yield Static("CI/CD Pipelines", id="ci-title")
-        yield LoadingIndicator(id="ci-loading")
-
-    def on_mount(self) -> None:
-        loading_indicator = self.query_one("#ci-loading", LoadingIndicator)
-        loading_indicator.display = False
-        self.query_one("#ci-title", Static).update(
-            f"CI/CD Pipelines\n\n  Host: {self._config.host}\n  Loading pipelines..."
         )
 
 
@@ -190,15 +115,14 @@ class GLToolsApp(App[None]):
         container = self.query_one("#screen-container", Static)
         container.remove_children()
 
-        screen_widget: Static | DashboardScreen
         if screen_name == "dashboard":
             screen_widget = DashboardScreen(self._config)
         elif screen_name == "mr":
-            screen_widget = MergeRequestScreen(self._config)
+            screen_widget = MRListScreen(self._config)
         elif screen_name == "issues":
-            screen_widget = IssueScreen(self._config)
+            screen_widget = IssueListScreen(self._config)
         elif screen_name == "ci":
-            screen_widget = CIScreen(self._config)
+            screen_widget = CIStatusScreen(self._config)
         else:
             screen_widget = DashboardScreen(self._config)
 

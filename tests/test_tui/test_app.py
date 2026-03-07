@@ -8,12 +8,12 @@ from textual.widgets import Footer, Header
 from gltools.config.settings import GitLabConfig
 from gltools.tui.app import (
     AuthRequiredScreen,
-    CIScreen,
-    DashboardScreen,
     GLToolsApp,
-    IssueScreen,
-    MergeRequestScreen,
 )
+from gltools.tui.screens.ci_status import CIStatusScreen
+from gltools.tui.screens.dashboard import DashboardScreen
+from gltools.tui.screens.issue_list import IssueListScreen
+from gltools.tui.screens.mr_list import MRListScreen
 
 
 def _make_config(
@@ -81,21 +81,21 @@ class TestScreenNavigation:
         app = GLToolsApp(config=_make_config())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("m")
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
 
     @pytest.mark.asyncio
     async def test_switch_to_issues_screen(self) -> None:
         app = GLToolsApp(config=_make_config())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("i")
-            assert app.query(IssueScreen)
+            assert app.query(IssueListScreen)
 
     @pytest.mark.asyncio
     async def test_switch_to_ci_screen(self) -> None:
         app = GLToolsApp(config=_make_config())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("c")
-            assert app.query(CIScreen)
+            assert app.query(CIStatusScreen)
 
     @pytest.mark.asyncio
     async def test_switch_back_to_dashboard(self) -> None:
@@ -112,7 +112,7 @@ class TestScreenNavigation:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("m")
             assert app.query(AuthRequiredScreen)
-            assert not app.query(MergeRequestScreen)
+            assert not app.query(MRListScreen)
 
 
 class TestScreenNavigationCycles:
@@ -124,11 +124,11 @@ class TestScreenNavigationCycles:
         async with app.run_test(size=(80, 24)) as pilot:
             assert app.query(DashboardScreen)
             await pilot.press("m")
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
             await pilot.press("i")
-            assert app.query(IssueScreen)
+            assert app.query(IssueListScreen)
             await pilot.press("c")
-            assert app.query(CIScreen)
+            assert app.query(CIStatusScreen)
             await pilot.press("d")
             assert app.query(DashboardScreen)
 
@@ -139,16 +139,16 @@ class TestScreenNavigationCycles:
             await pilot.press("m")
             await pilot.press("i")
             await pilot.press("c")
-            assert app.query(CIScreen)
+            assert app.query(CIStatusScreen)
 
     @pytest.mark.asyncio
     async def test_switch_to_same_screen(self) -> None:
         app = GLToolsApp(config=_make_config())
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.press("m")
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
             await pilot.press("m")
-            assert app.query(MergeRequestScreen)
+            assert app.query(MRListScreen)
 
     def test_show_screen_unknown_falls_back_to_dashboard_widget(self) -> None:
         app = GLToolsApp(config=_make_config())
@@ -182,17 +182,17 @@ class TestScreenWidgets:
 
     def test_mr_screen_stores_config(self) -> None:
         config = _make_config()
-        screen = MergeRequestScreen(config)
+        screen = MRListScreen(config)
         assert screen._config is config
 
     def test_issue_screen_stores_config(self) -> None:
         config = _make_config()
-        screen = IssueScreen(config)
+        screen = IssueListScreen(config)
         assert screen._config is config
 
     def test_ci_screen_stores_config(self) -> None:
         config = _make_config()
-        screen = CIScreen(config)
+        screen = CIStatusScreen(config)
         assert screen._config is config
 
 

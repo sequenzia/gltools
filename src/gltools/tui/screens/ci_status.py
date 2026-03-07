@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from textual import on, work
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
 
     from gltools.models.job import Job
     from gltools.models.pipeline import Pipeline
+
+logger = logging.getLogger(__name__)
 
 # Auto-refresh interval in seconds for running pipelines
 AUTO_REFRESH_INTERVAL = 10.0
@@ -487,10 +490,45 @@ class CIStatusScreen(Widget):
 
     @work(exclusive=True, name="load_pipelines")
     async def _load_pipelines(self) -> None:
-        """Load pipeline data. Stub for service integration."""
-        panel = self.query_one("#pipeline-list-panel", PipelineListPanel)
-        loading = panel.query_one("#pipeline-loading", LoadingIndicator)
-        loading.display = False
+        """Load pipeline data from the CIService."""
+        from gltools.client.gitlab import GitLabClient
+        from gltools.config.git_remote import detect_gitlab_remote
+        from gltools.services.ci import CIService
+
+        token = self._config.token
+        if not token:
+            panel = self.query_one("#pipeline-list-panel", PipelineListPanel)
+            panel.query_one("#pipeline-loading", LoadingIndicator).display = False
+            self.app.notify("Authentication not configured", severity="error")
+            return
+
+        client = GitLabClient(host=self._config.host, token=token)
+        try:
+            remote_info = detect_gitlab_remote()
+            project = self._config.default_project or (
+                remote_info.project_path if remote_info else None
+            )
+            if not project:
+                panel = self.query_one("#pipeline-list-panel", PipelineListPanel)
+                panel.query_one("#pipeline-loading", LoadingIndicator).display = False
+                self.app.notify("No project configured or detected", severity="error")
+                return
+
+            service = CIService(
+                project_id=project,
+                pipeline_manager=client.pipelines,
+                job_manager=client.jobs,
+                mr_manager=client.merge_requests,
+            )
+            response = await service.list_pipelines(per_page=20)
+            self.set_pipelines(response.items)
+        except Exception as exc:
+            logger.exception("Failed to load pipelines")
+            panel = self.query_one("#pipeline-list-panel", PipelineListPanel)
+            panel.query_one("#pipeline-loading", LoadingIndicator).display = False
+            self.app.notify(f"Failed to load pipelines: {exc}", severity="error")
+        finally:
+            await client.close()
 
     def set_pipelines(self, pipelines: list[Pipeline]) -> None:
         """Set pipeline data and update the display.
