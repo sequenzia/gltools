@@ -11,6 +11,7 @@ from textual.widgets import Button, DataTable, Input, Static
 
 from gltools.config.settings import GitLabConfig
 from gltools.models.issue import Issue
+from gltools.models.milestone import MilestoneRef
 from gltools.models.user import UserRef
 from gltools.tui.screens.issue_detail import (
     IssueActionBar,
@@ -43,7 +44,7 @@ def _make_issue(
     state: str = "opened",
     labels: list[str] | None = None,
     description: str | None = "An issue description.",
-    milestone: str | None = None,
+    milestone: MilestoneRef | None = None,
     confidential: bool = False,
     assignee: UserRef | None = None,
 ) -> Issue:
@@ -187,7 +188,14 @@ class TestIssueListScreen:
         app = IssueListApp(_make_config())
         async with app.run_test(size=(120, 30)):
             issue_list = app.query_one("#issue-list", IssueListScreen)
-            issues = [_make_issue(iid=1, milestone="v1.0")]
+            issues = [
+                _make_issue(
+                    iid=1,
+                    milestone=MilestoneRef(
+                        id=5, iid=1, title="v1.0", state="active", web_url="https://gitlab.example.com/-/milestones/1"
+                    ),
+                )
+            ]
             issue_list.populate_table(issues, total=1)
             table = app.query_one("#issue-table", DataTable)
             assert table.row_count == 1
@@ -650,7 +658,11 @@ class TestIssueHeader:
 
     @pytest.mark.asyncio
     async def test_issue_with_milestone(self) -> None:
-        issue = _make_issue(milestone="v2.0")
+        issue = _make_issue(
+            milestone=MilestoneRef(
+                id=6, iid=2, title="v2.0", state="active", web_url="https://gitlab.example.com/-/milestones/2"
+            )
+        )
         app = IssueHeaderApp(issue)
         async with app.run_test(size=(120, 30)):
             header = app.query_one("#issue-header", IssueHeader)

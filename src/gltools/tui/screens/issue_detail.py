@@ -96,7 +96,7 @@ class IssueHeader(Widget):
         if issue.assignee:
             meta_parts.append(f"[bold]Assignee:[/bold] {issue.assignee.name}")
         if issue.milestone:
-            meta_parts.append(f"[bold]Milestone:[/bold] {issue.milestone}")
+            meta_parts.append(f"[bold]Milestone:[/bold] {issue.milestone.title}")
 
         yield Static("\n".join(meta_parts), id="issue-meta")
 
@@ -110,9 +110,7 @@ class IssueHeader(Widget):
             title_prefix = ""
             if getattr(issue, "confidential", False):
                 title_prefix = "[bold red]CONFIDENTIAL[/] "
-            header_row.mount(
-                Static(f"{title_prefix}[bold]#{issue.iid}[/bold]  {issue.title}", id="issue-title-text")
-            )
+            header_row.mount(Static(f"{title_prefix}[bold]#{issue.iid}[/bold]  {issue.title}", id="issue-title-text"))
             header_row.mount(StatusBadge(issue.state, id="issue-state-badge"))
 
             meta_parts = [
@@ -124,7 +122,7 @@ class IssueHeader(Widget):
             if issue.assignee:
                 meta_parts.append(f"[bold]Assignee:[/bold] {issue.assignee.name}")
             if issue.milestone:
-                meta_parts.append(f"[bold]Milestone:[/bold] {issue.milestone}")
+                meta_parts.append(f"[bold]Milestone:[/bold] {issue.milestone.title}")
 
             self.mount(Static("\n".join(meta_parts), id="issue-meta"))
 
@@ -321,9 +319,7 @@ class IssueDetailScreen(Widget):
             with TabPane("Description", id="tab-description"):
                 yield VerticalScroll(
                     Markdown(
-                        "*Loading...*"
-                        if self._issue is None
-                        else (self._issue.description or "*No description*")
+                        "*Loading...*" if self._issue is None else (self._issue.description or "*No description*")
                     ),
                     id="description-content",
                 )
@@ -398,9 +394,7 @@ class IssueDetailScreen(Widget):
             title = mr.get("title", "Untitled")
             state = mr.get("state", "unknown")
             state_colored = f"[{status_color(state)}]{state}[/]"
-            container.mount(
-                Static(f"  !{iid}  {title}  {state_colored}", classes="linked-mr-entry")
-            )
+            container.mount(Static(f"  !{iid}  {title}  {state_colored}", classes="linked-mr-entry"))
 
     def action_go_back(self) -> None:
         """Return to the issue list."""

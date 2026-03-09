@@ -40,9 +40,7 @@ class TestMergeRequestResponseFactory:
         assert mr.pipeline.id == 500
 
     def test_override_nested_author(self) -> None:
-        data = merge_request_response(
-            author={"id": 50, "username": "override_user", "name": "Override User"}
-        )
+        data = merge_request_response(author={"id": 50, "username": "override_user", "name": "Override User"})
         mr = MergeRequest.model_validate(data)
         assert mr.author.id == 50
         assert mr.author.username == "override_user"
@@ -71,7 +69,8 @@ class TestIssueResponseFactory:
         assert issue.author.username == "bobsmith"
         assert issue.assignee is not None
         assert issue.assignee.username == "janedoe"
-        assert issue.milestone == "v1.0"
+        assert issue.milestone is not None
+        assert issue.milestone.title == "v1.0"
 
     def test_override_nested_author(self) -> None:
         data = issue_response(author={"id": 77, "username": "charlie", "name": "Charlie"})

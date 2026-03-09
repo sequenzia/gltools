@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 from gltools.models.issue import Issue
+from gltools.models.milestone import MilestoneRef
 from gltools.models.user import UserRef
 
 
@@ -17,7 +18,13 @@ def _make_issue_data(**overrides: object) -> dict:
         "author": {"id": 1, "username": "alice", "name": "Alice"},
         "assignee": {"id": 2, "username": "bob", "name": "Bob"},
         "labels": ["bug", "priority::high"],
-        "milestone": "v1.0",
+        "milestone": {
+            "id": 5,
+            "iid": 1,
+            "title": "v1.0",
+            "state": "active",
+            "web_url": "https://gitlab.example.com/project/-/milestones/1",
+        },
         "created_at": "2025-06-15T10:30:00.000Z",
         "updated_at": "2025-06-16T08:00:00.000Z",
         "closed_at": None,
@@ -42,7 +49,8 @@ class TestIssueParsing:
         assert isinstance(issue.assignee, UserRef)
         assert issue.assignee.username == "bob"
         assert issue.labels == ["bug", "priority::high"]
-        assert issue.milestone == "v1.0"
+        assert isinstance(issue.milestone, MilestoneRef)
+        assert issue.milestone.title == "v1.0"
         assert issue.closed_at is None
 
     def test_datetime_fields_parse_iso8601(self) -> None:

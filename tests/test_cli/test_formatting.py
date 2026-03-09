@@ -53,7 +53,7 @@ class FakeIssue(BaseModel):
     title: str
     description: str | None = None
     state: str = "opened"
-    milestone: str | None = None
+    milestone: dict | None = None
     author: dict = {"name": "Bob", "username": "bob"}
     labels: list[str] = []
     updated_at: str = "2026-01-15T10:00:00Z"
@@ -320,31 +320,23 @@ class TestDetailView:
 class TestOutputResult:
     def test_json_mode_outputs_valid_json(self) -> None:
         result = CommandResult(status="success", data={"id": 1})
-        output = _capture_console_output(
-            output_result, result, ctx_obj={"output_format": "json", "quiet": False}
-        )
+        output = _capture_console_output(output_result, result, ctx_obj={"output_format": "json", "quiet": False})
         parsed = json.loads(output.strip())
         assert parsed["status"] == "success"
 
     def test_text_mode_empty_list(self) -> None:
         result = CommandResult(status="success", data=[])
-        output = _capture_console_output(
-            output_result, result, ctx_obj={"output_format": "text", "quiet": False}
-        )
+        output = _capture_console_output(output_result, result, ctx_obj={"output_format": "text", "quiet": False})
         assert "No items found" in output
 
     def test_quiet_suppresses_output(self) -> None:
         result = CommandResult(status="success", data={"id": 1})
-        output = _capture_console_output(
-            output_result, result, ctx_obj={"output_format": "text", "quiet": True}
-        )
+        output = _capture_console_output(output_result, result, ctx_obj={"output_format": "text", "quiet": True})
         assert output == ""
 
     def test_text_mode_success_no_data(self) -> None:
         result = CommandResult(status="success")
-        output = _capture_console_output(
-            output_result, result, ctx_obj={"output_format": "text", "quiet": False}
-        )
+        output = _capture_console_output(output_result, result, ctx_obj={"output_format": "text", "quiet": False})
         assert "Success" in output
 
 
@@ -356,25 +348,23 @@ class TestOutputResult:
 class TestOutputPaginated:
     def test_json_mode_valid_json(self) -> None:
         response = PaginatedResponse(items=[1, 2], page=1, per_page=20, total=2)
-        output = _capture_console_output(
-            output_paginated, response, ctx_obj={"output_format": "json", "quiet": False}
-        )
+        output = _capture_console_output(output_paginated, response, ctx_obj={"output_format": "json", "quiet": False})
         parsed = json.loads(output.strip())
         assert parsed["items"] == [1, 2]
 
     def test_text_mode_empty_list(self) -> None:
         response = PaginatedResponse(items=[], page=1, per_page=20, total=0)
         output = _capture_console_output(
-            output_paginated, response, entity_name="merge requests",
+            output_paginated,
+            response,
+            entity_name="merge requests",
             ctx_obj={"output_format": "text", "quiet": False},
         )
         assert "No merge requests found" in output
 
     def test_quiet_suppresses_output(self) -> None:
         response = PaginatedResponse(items=[1], page=1, per_page=20, total=1)
-        output = _capture_console_output(
-            output_paginated, response, ctx_obj={"output_format": "text", "quiet": True}
-        )
+        output = _capture_console_output(output_paginated, response, ctx_obj={"output_format": "text", "quiet": True})
         assert output == ""
 
 
@@ -429,9 +419,7 @@ class TestOutputDryRun:
             url="/projects/test%2Fproject/merge_requests",
             body={"title": "Test MR", "source_branch": "feat", "target_branch": "main"},
         )
-        output = _capture_console_output(
-            output_dry_run, result, ctx_obj={"output_format": "text"}
-        )
+        output = _capture_console_output(output_dry_run, result, ctx_obj={"output_format": "text"})
         assert "DRY RUN" in output
         assert "POST" in output
         assert "/projects/test%2Fproject/merge_requests" in output
@@ -442,9 +430,7 @@ class TestOutputDryRun:
             method="POST",
             url="/projects/42/pipelines/100/retry",
         )
-        output = _capture_console_output(
-            output_dry_run, result, ctx_obj={"output_format": "text"}
-        )
+        output = _capture_console_output(output_dry_run, result, ctx_obj={"output_format": "text"})
         assert "DRY RUN" in output
         assert "POST" in output
         assert "Body" not in output
@@ -455,9 +441,7 @@ class TestOutputDryRun:
             url="/projects/42/merge_requests/10",
             body={"title": "Updated"},
         )
-        output = _capture_console_output(
-            output_dry_run, result, ctx_obj={"output_format": "json"}
-        )
+        output = _capture_console_output(output_dry_run, result, ctx_obj={"output_format": "json"})
         parsed = json.loads(output.strip())
         assert parsed["dry_run"] is True
         assert parsed["method"] == "PUT"
@@ -469,9 +453,7 @@ class TestOutputDryRun:
             method="POST",
             url="/projects/42/merge_requests/10/approve",
         )
-        output = _capture_console_output(
-            output_dry_run, result, ctx_obj={"output_format": "json"}
-        )
+        output = _capture_console_output(output_dry_run, result, ctx_obj={"output_format": "json"})
         parsed = json.loads(output.strip())
         assert parsed["dry_run"] is True
         assert parsed["method"] == "POST"
@@ -479,9 +461,7 @@ class TestOutputDryRun:
 
     def test_text_mode_shows_end_banner(self) -> None:
         result = DryRunResult(method="PUT", url="/test")
-        output = _capture_console_output(
-            output_dry_run, result, ctx_obj={"output_format": "text"}
-        )
+        output = _capture_console_output(output_dry_run, result, ctx_obj={"output_format": "text"})
         assert "END DRY RUN" in output
 
 

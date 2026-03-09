@@ -3,6 +3,7 @@
 from gltools.models.base import BaseGitLabModel
 from gltools.models.issue import Issue
 from gltools.models.job import Job
+from gltools.models.milestone import MilestoneRef
 from gltools.models.output import CommandResult, DryRunResult, ErrorResult, PaginatedResponse
 from gltools.models.pipeline import Pipeline
 from gltools.models.user import UserRef
@@ -29,6 +30,7 @@ __all__ = [
     "ErrorResult",
     "Issue",
     "Job",
+    "MilestoneRef",
     "MergeRequest",
     "Note",
     "PaginatedResponse",

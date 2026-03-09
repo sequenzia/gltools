@@ -295,6 +295,12 @@ def format_detail_text(item: Any) -> None:
         elif key == "state" or key == "status":
             console.print(f"[bold]{label}:[/bold] ", end="")
             console.print(_colored_status(str(value or "")))
+        elif isinstance(value, BaseModel):
+            display = getattr(value, "title", None) or getattr(value, "name", None) or str(value)
+            console.print(f"[bold]{label}:[/bold] {display}")
+        elif isinstance(value, dict):
+            display = value.get("title") or value.get("name") or str(value)
+            console.print(f"[bold]{label}:[/bold] {display}")
         else:
             display = str(value) if value is not None else "-"
             console.print(f"[bold]{label}:[/bold] {display}")

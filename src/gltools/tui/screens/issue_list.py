@@ -300,7 +300,7 @@ class IssueListScreen(Widget):
             labels = ", ".join(issue.labels[:3])
             if len(issue.labels) > 3:
                 labels += "..."
-            milestone = issue.milestone or "-"
+            milestone = issue.milestone.title if issue.milestone else "-"
             updated = str(issue.updated_at)[:10]
 
             state_styled = f"[{status_color(state)}]{state}[/]"

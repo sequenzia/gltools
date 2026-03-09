@@ -44,7 +44,13 @@ ISSUE_DATA = {
     "author": {"id": 5, "username": "alice", "name": "Alice"},
     "assignee": {"id": 6, "username": "bob", "name": "Bob"},
     "labels": ["bug", "critical"],
-    "milestone": "v1.0",
+    "milestone": {
+        "id": 5,
+        "iid": 1,
+        "title": "v1.0",
+        "state": "active",
+        "web_url": "https://gitlab.example.com/project/-/milestones/1",
+    },
     "created_at": "2026-01-10T08:00:00Z",
     "updated_at": "2026-01-11T09:00:00Z",
     "closed_at": None,
@@ -112,9 +118,7 @@ class TestList:
     @respx.mock
     async def test_list_empty_results(self, manager: IssueManager, base_url: str) -> None:
         headers = {**PAGINATION_HEADERS, "X-Total": "0", "X-Total-Pages": "0"}
-        respx.get(f"{base_url}/projects/1/issues").mock(
-            return_value=httpx.Response(200, json=[], headers=headers)
-        )
+        respx.get(f"{base_url}/projects/1/issues").mock(return_value=httpx.Response(200, json=[], headers=headers))
         result = await manager.list(1)
         assert result.items == []
         assert result.total == 0
@@ -131,9 +135,7 @@ class TestList:
 class TestGet:
     @respx.mock
     async def test_get_returns_issue(self, manager: IssueManager, base_url: str) -> None:
-        respx.get(f"{base_url}/projects/1/issues/10").mock(
-            return_value=httpx.Response(200, json=ISSUE_DATA)
-        )
+        respx.get(f"{base_url}/projects/1/issues/10").mock(return_value=httpx.Response(200, json=ISSUE_DATA))
         result = await manager.get(1, 10)
         assert isinstance(result, Issue)
         assert result.iid == 10
@@ -161,9 +163,7 @@ class TestGet:
 class TestCreate:
     @respx.mock
     async def test_create_sends_correct_body(self, manager: IssueManager, base_url: str) -> None:
-        route = respx.post(f"{base_url}/projects/1/issues").mock(
-            return_value=httpx.Response(201, json=ISSUE_DATA)
-        )
+        route = respx.post(f"{base_url}/projects/1/issues").mock(return_value=httpx.Response(201, json=ISSUE_DATA))
         result = await manager.create(
             1,
             title="Bug in login",
@@ -184,9 +184,7 @@ class TestCreate:
 
     @respx.mock
     async def test_create_minimal(self, manager: IssueManager, base_url: str) -> None:
-        route = respx.post(f"{base_url}/projects/1/issues").mock(
-            return_value=httpx.Response(201, json=ISSUE_DATA)
-        )
+        route = respx.post(f"{base_url}/projects/1/issues").mock(return_value=httpx.Response(201, json=ISSUE_DATA))
         await manager.create(1, title="Simple issue")
         body = json.loads(route.calls[0].request.content)
         assert body["title"] == "Simple issue"
@@ -200,9 +198,7 @@ class TestCreate:
 class TestUpdate:
     @respx.mock
     async def test_update_sends_fields(self, manager: IssueManager, base_url: str) -> None:
-        route = respx.put(f"{base_url}/projects/1/issues/10").mock(
-            return_value=httpx.Response(200, json=ISSUE_DATA)
-        )
+        route = respx.put(f"{base_url}/projects/1/issues/10").mock(return_value=httpx.Response(200, json=ISSUE_DATA))
         result = await manager.update(1, 10, title="Updated title", description="New desc")
         assert isinstance(result, Issue)
         body = json.loads(route.calls[0].request.content)
@@ -222,9 +218,7 @@ class TestClose:
     @respx.mock
     async def test_close_sends_state_event_close(self, manager: IssueManager, base_url: str) -> None:
         closed = {**ISSUE_DATA, "state": "closed", "closed_at": "2026-01-12T00:00:00Z"}
-        route = respx.put(f"{base_url}/projects/1/issues/10").mock(
-            return_value=httpx.Response(200, json=closed)
-        )
+        route = respx.put(f"{base_url}/projects/1/issues/10").mock(return_value=httpx.Response(200, json=closed))
         result = await manager.close(1, 10)
         assert isinstance(result, Issue)
         assert result.state == "closed"
@@ -236,9 +230,7 @@ class TestReopen:
     @respx.mock
     async def test_reopen_sends_state_event_reopen(self, manager: IssueManager, base_url: str) -> None:
         reopened = {**ISSUE_DATA, "state": "opened"}
-        route = respx.put(f"{base_url}/projects/1/issues/10").mock(
-            return_value=httpx.Response(200, json=reopened)
-        )
+        route = respx.put(f"{base_url}/projects/1/issues/10").mock(return_value=httpx.Response(200, json=reopened))
         result = await manager.reopen(1, 10)
         assert isinstance(result, Issue)
         assert result.state == "opened"
@@ -249,9 +241,7 @@ class TestReopen:
 class TestNotes:
     @respx.mock
     async def test_notes_returns_list(self, manager: IssueManager, base_url: str) -> None:
-        respx.get(f"{base_url}/projects/1/issues/10/notes").mock(
-            return_value=httpx.Response(200, json=[NOTE_DATA])
-        )
+        respx.get(f"{base_url}/projects/1/issues/10/notes").mock(return_value=httpx.Response(200, json=[NOTE_DATA]))
         result = await manager.notes(1, 10)
         assert len(result) == 1
         assert isinstance(result[0], Note)
@@ -286,9 +276,7 @@ class TestIssueWithLinkedMR:
             "web_url": "https://gitlab.example.com/project/-/issues/10",
             "confidential": False,
         }
-        respx.get(f"{base_url}/projects/1/issues/10").mock(
-            return_value=httpx.Response(200, json=data)
-        )
+        respx.get(f"{base_url}/projects/1/issues/10").mock(return_value=httpx.Response(200, json=data))
         result = await manager.get(1, 10)
         assert isinstance(result, Issue)
         assert result.iid == 10
