@@ -59,9 +59,9 @@ def store_token(token: str, *, profile: str = "default") -> None:
             logger.debug("Token stored in system keyring for profile '%s'", profile)
             return
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring. Token will be stored in config file.")
+        logger.debug("Cannot access system keyring. Token will be stored in config file.")
     except Exception:
-        logger.warning("Unexpected keyring error. Token will be stored in config file.")
+        logger.debug("Unexpected keyring error. Token will be stored in config file.")
 
     _write_token_file(token, profile)
 
@@ -81,9 +81,9 @@ def get_token(*, profile: str = "default") -> str | None:
             if token is not None:
                 return token
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring. Falling back to config file.")
+        logger.debug("Cannot access system keyring. Falling back to config file.")
     except Exception:
-        logger.warning("Unexpected keyring error. Falling back to config file.")
+        logger.debug("Unexpected keyring error. Falling back to config file.")
 
     return _read_token_file(profile)
 
@@ -109,9 +109,9 @@ def delete_token(*, profile: str = "default") -> bool:
                 deleted = True
                 logger.debug("Token deleted from system keyring for profile '%s'", profile)
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring for token deletion.")
+        logger.debug("Cannot access system keyring for token deletion.")
     except Exception:
-        logger.warning("Unexpected keyring error during token deletion.")
+        logger.debug("Unexpected keyring error during token deletion.")
 
     if _delete_token_file(profile):
         deleted = True
@@ -141,9 +141,9 @@ def store_refresh_token(token: str, *, profile: str = "default") -> None:
             logger.debug("Refresh token stored in system keyring for profile '%s'", profile)
             return
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring. Refresh token will be stored in config file.")
+        logger.debug("Cannot access system keyring. Refresh token will be stored in config file.")
     except Exception:
-        logger.warning("Unexpected keyring error. Refresh token will be stored in config file.")
+        logger.debug("Unexpected keyring error. Refresh token will be stored in config file.")
 
     _write_file(_refresh_token_file_path(profile), token)
 
@@ -156,9 +156,9 @@ def get_refresh_token(*, profile: str = "default") -> str | None:
             if token is not None:
                 return token
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring. Falling back to config file.")
+        logger.debug("Cannot access system keyring. Falling back to config file.")
     except Exception:
-        logger.warning("Unexpected keyring error. Falling back to config file.")
+        logger.debug("Unexpected keyring error. Falling back to config file.")
 
     return _read_file(_refresh_token_file_path(profile))
 
@@ -174,9 +174,9 @@ def delete_refresh_token(*, profile: str = "default") -> bool:
                 deleted = True
                 logger.debug("Refresh token deleted from system keyring for profile '%s'", profile)
     except (KeyringError, NoKeyringError):
-        logger.warning("Cannot access system keyring for refresh token deletion.")
+        logger.debug("Cannot access system keyring for refresh token deletion.")
     except Exception:
-        logger.warning("Unexpected keyring error during refresh token deletion.")
+        logger.debug("Unexpected keyring error during refresh token deletion.")
 
     if _delete_file(_refresh_token_file_path(profile)):
         deleted = True
