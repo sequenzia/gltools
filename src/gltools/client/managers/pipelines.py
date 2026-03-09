@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from gltools.client.exceptions import NotFoundError
 from gltools.models.output import PaginatedResponse
@@ -12,11 +13,24 @@ if TYPE_CHECKING:
     from gltools.client.http import GitLabHTTPClient
 
 
+def _encode_project(project_id: int | str) -> str:
+    """URL-encode a project ID (handles both numeric IDs and namespace/project paths)."""
+    if isinstance(project_id, int):
+        return str(project_id)
+    return quote(project_id, safe="")
+
+
 class PipelineManager:
     """Typed manager for GitLab CI/CD pipeline API operations."""
 
     def __init__(self, client: GitLabHTTPClient) -> None:
         self._client = client
+
+    def _base_path(self, project_id: int | str) -> str:
+        return f"/projects/{_encode_project(project_id)}/pipelines"
+
+    def _pipeline_path(self, project_id: int | str, pipeline_id: int) -> str:
+        return f"{self._base_path(project_id)}/{pipeline_id}"
 
     async def list(
         self,
@@ -49,7 +63,7 @@ class PipelineManager:
         if source is not None:
             params["source"] = source
 
-        response = await self._client.get(f"/projects/{project_id}/pipelines", **params)
+        response = await self._client.get(self._base_path(project_id), **params)
         pagination = self._client.parse_pagination(response)
 
         items = [Pipeline.model_validate(item) for item in response.json()]
@@ -75,10 +89,11 @@ class PipelineManager:
         Raises:
             NotFoundError: If the pipeline is not found.
         """
+        path = self._pipeline_path(project_id, pipeline_id)
         try:
-            response = await self._client.get(f"/projects/{project_id}/pipelines/{pipeline_id}")
+            response = await self._client.get(path)
         except NotFoundError:
-            raise NotFoundError(resource="Pipeline", path=f"/projects/{project_id}/pipelines/{pipeline_id}") from None
+            raise NotFoundError(resource="Pipeline", path=path) from None
         return Pipeline.model_validate(response.json())
 
     async def create(self, project_id: int | str, *, ref: str) -> Pipeline:
@@ -91,7 +106,8 @@ class PipelineManager:
         Returns:
             The newly created Pipeline object.
         """
-        response = await self._client.post(f"/projects/{project_id}/pipeline", ref=ref)
+        path = f"/projects/{_encode_project(project_id)}/pipeline"
+        response = await self._client.post(path, ref=ref)
         return Pipeline.model_validate(response.json())
 
     async def retry(self, project_id: int | str, pipeline_id: int) -> Pipeline:
@@ -107,10 +123,11 @@ class PipelineManager:
         Raises:
             NotFoundError: If the pipeline is not found.
         """
+        path = self._pipeline_path(project_id, pipeline_id)
         try:
-            response = await self._client.post(f"/projects/{project_id}/pipelines/{pipeline_id}/retry")
+            response = await self._client.post(f"{path}/retry")
         except NotFoundError:
-            raise NotFoundError(resource="Pipeline", path=f"/projects/{project_id}/pipelines/{pipeline_id}") from None
+            raise NotFoundError(resource="Pipeline", path=path) from None
         return Pipeline.model_validate(response.json())
 
     async def cancel(self, project_id: int | str, pipeline_id: int) -> Pipeline:
@@ -126,8 +143,9 @@ class PipelineManager:
         Raises:
             NotFoundError: If the pipeline is not found.
         """
+        path = self._pipeline_path(project_id, pipeline_id)
         try:
-            response = await self._client.post(f"/projects/{project_id}/pipelines/{pipeline_id}/cancel")
+            response = await self._client.post(f"{path}/cancel")
         except NotFoundError:
-            raise NotFoundError(resource="Pipeline", path=f"/projects/{project_id}/pipelines/{pipeline_id}") from None
+            raise NotFoundError(resource="Pipeline", path=path) from None
         return Pipeline.model_validate(response.json())

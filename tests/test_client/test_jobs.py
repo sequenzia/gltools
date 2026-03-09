@@ -67,6 +67,15 @@ class TestList:
         assert result == []
 
     @respx.mock
+    async def test_list_with_string_project_id(self, manager: JobManager, base_url: str) -> None:
+        respx.get(f"{base_url}/projects/my-group%2Fmy-project/pipelines/100/jobs").mock(
+            return_value=httpx.Response(200, json=[JOB_DATA])
+        )
+        result = await manager.list("my-group/my-project", 100)
+        assert isinstance(result, list)
+        assert len(result) == 1
+
+    @respx.mock
     async def test_list_includes_manual_jobs(self, manager: JobManager, base_url: str) -> None:
         manual_job = {**JOB_DATA, "id": 1003, "name": "deploy", "stage": "deploy", "status": "manual"}
         respx.get(f"{base_url}/projects/1/pipelines/100/jobs").mock(

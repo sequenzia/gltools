@@ -255,7 +255,7 @@ class DashboardScreen(Widget):
 
             remote_info = detect_gitlab_remote()
             project = self._config.default_project or (
-                remote_info.project_path if remote_info else None
+                remote_info.project_path_encoded if remote_info else None
             )
 
             if not project:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from gltools.client.exceptions import NotFoundError
 from gltools.models.job import Job
@@ -14,11 +15,21 @@ if TYPE_CHECKING:
     from gltools.client.http import GitLabHTTPClient
 
 
+def _encode_project(project_id: int | str) -> str:
+    """URL-encode a project ID (handles both numeric IDs and namespace/project paths)."""
+    if isinstance(project_id, int):
+        return str(project_id)
+    return quote(project_id, safe="")
+
+
 class JobManager:
     """Typed manager for GitLab CI/CD job API operations."""
 
     def __init__(self, client: GitLabHTTPClient) -> None:
         self._client = client
+
+    def _job_path(self, project_id: int | str, job_id: int) -> str:
+        return f"/projects/{_encode_project(project_id)}/jobs/{job_id}"
 
     async def list(self, project_id: int | str, pipeline_id: int) -> list[Job]:
         """List jobs for a specific pipeline.
@@ -30,7 +41,8 @@ class JobManager:
         Returns:
             A list of Job objects for the pipeline.
         """
-        response = await self._client.get(f"/projects/{project_id}/pipelines/{pipeline_id}/jobs")
+        path = f"/projects/{_encode_project(project_id)}/pipelines/{pipeline_id}/jobs"
+        response = await self._client.get(path)
         return [Job.model_validate(item) for item in response.json()]
 
     async def get(self, project_id: int | str, job_id: int) -> Job:
@@ -46,10 +58,11 @@ class JobManager:
         Raises:
             NotFoundError: If the job is not found.
         """
+        path = self._job_path(project_id, job_id)
         try:
-            response = await self._client.get(f"/projects/{project_id}/jobs/{job_id}")
+            response = await self._client.get(path)
         except NotFoundError:
-            raise NotFoundError(resource="Job", path=f"/projects/{project_id}/jobs/{job_id}") from None
+            raise NotFoundError(resource="Job", path=path) from None
         return Job.model_validate(response.json())
 
     @asynccontextmanager
@@ -71,11 +84,12 @@ class JobManager:
         Raises:
             NotFoundError: If the job is not found.
         """
+        path = self._job_path(project_id, job_id)
         try:
-            async with self._client.stream_get(f"/projects/{project_id}/jobs/{job_id}/trace") as stream:
+            async with self._client.stream_get(f"{path}/trace") as stream:
                 yield stream
         except NotFoundError:
-            raise NotFoundError(resource="Job", path=f"/projects/{project_id}/jobs/{job_id}") from None
+            raise NotFoundError(resource="Job", path=path) from None
 
     @asynccontextmanager
     async def artifacts(self, project_id: int | str, job_id: int) -> AsyncIterator[AsyncIterator[bytes]]:
@@ -96,10 +110,9 @@ class JobManager:
         Raises:
             NotFoundError: If the job is not found.
         """
+        path = self._job_path(project_id, job_id)
         try:
-            async with self._client.stream_get(
-                f"/projects/{project_id}/jobs/{job_id}/artifacts"
-            ) as stream:
+            async with self._client.stream_get(f"{path}/artifacts") as stream:
                 yield stream
         except NotFoundError:
-            raise NotFoundError(resource="Job", path=f"/projects/{project_id}/jobs/{job_id}") from None
+            raise NotFoundError(resource="Job", path=path) from None

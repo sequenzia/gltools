@@ -140,6 +140,14 @@ class TestList:
         result = await manager.list(1)
         assert result.items[0].status == "manual"
 
+    @respx.mock
+    async def test_list_with_string_project_id(self, manager: PipelineManager, base_url: str) -> None:
+        respx.get(f"{base_url}/projects/my-group%2Fmy-project/pipelines").mock(
+            return_value=httpx.Response(200, json=[], headers=PAGINATION_HEADERS)
+        )
+        result = await manager.list("my-group/my-project")
+        assert isinstance(result, PaginatedResponse)
+
 
 class TestGet:
     @respx.mock
