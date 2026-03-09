@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -128,8 +129,26 @@ def main(
         "-q",
         help="Suppress non-error output.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose output (INFO level logging).",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Enable debug output (DEBUG level logging). Overrides --verbose.",
+    ),
+    log_file: str | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write logs to the specified file (JSON format).",
+    ),
 ) -> None:
     """gltools - CLI and TUI for GitLab."""
+    from gltools.logging import setup_logging
+
     ctx.ensure_object(dict)
 
     # Determine output format from flags
@@ -139,11 +158,35 @@ def main(
     elif text_output:
         output_format = "text"
 
+    # Determine log level: --debug takes precedence over --verbose
+    if debug:
+        log_level = "DEBUG"
+    elif verbose:
+        log_level = "INFO"
+    else:
+        log_level = "WARNING"
+
+    # Validate --log-file path early to produce a clear error
+    if log_file is not None:
+        try:
+            log_file_path = Path(log_file)
+            log_file_path.parent.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError) as exc:
+            typer.echo(f"Error: Cannot use log file '{log_file}': {exc}", err=True)
+            raise typer.Exit(code=1) from None
+
+    # Configure logging
+    setup_logging(level=log_level, log_file=log_file)
+
     ctx.obj["output_format"] = output_format
     ctx.obj["host"] = host
     ctx.obj["token"] = token
     ctx.obj["profile"] = profile
     ctx.obj["quiet"] = quiet
+    ctx.obj["verbose"] = verbose
+    ctx.obj["debug"] = debug
+    ctx.obj["log_level"] = log_level
+    ctx.obj["log_file"] = log_file
 
 
 @app.command()

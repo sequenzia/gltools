@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import typer
@@ -29,6 +30,8 @@ from gltools.client.exceptions import (
 )
 from gltools.models.output import CommandResult, DryRunResult, ErrorResult
 
+logger = logging.getLogger("gltools.cli.issue")
+
 
 def _ctx_obj(ctx: typer.Context) -> dict[str, Any]:
     """Get context object dict."""
@@ -52,6 +55,14 @@ async def _build_service(ctx: typer.Context, project: str | None = None) -> Any:
             "token": obj.get("token"),
             "output_format": obj.get("output_format"),
         },
+    )
+
+    logger.info(
+        "Config: host=%s, auth=%s, project=%s, profile=%s",
+        config.host,
+        config.auth_type,
+        project or config.default_project or "(auto-detect)",
+        config.profile,
     )
 
     token_refresher = _make_token_refresher(config) if config.auth_type == "oauth" and config.client_id else None

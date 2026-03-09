@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -25,6 +27,9 @@ from gltools.client.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of characters to include in body summaries at DEBUG level
+_BODY_SUMMARY_MAX_CHARS = 500
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,64 @@ class GitLabHTTPClient:
         masked_args = tuple(_mask_token(str(a)) if isinstance(a, str) else a for a in args)
         logger.log(level, masked_msg, *masked_args)
 
+    @staticmethod
+    def _truncate_body(text: str, max_chars: int = _BODY_SUMMARY_MAX_CHARS) -> str:
+        """Truncate a response body for logging, appending an indicator if trimmed."""
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + f"... [truncated, {len(text)} chars total]"
+
+    @staticmethod
+    def _format_headers(headers: httpx.Headers) -> str:
+        """Format HTTP headers as a string for debug logging."""
+        return " ".join(f"{k}={v}" for k, v in headers.items())
+
+    def _log_request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> None:
+        """Log request details at INFO (summary) and DEBUG (full details)."""
+        with contextlib.suppress(Exception):
+            self._safe_log(logging.INFO, "%s %s", method, path)
+            if logger.isEnabledFor(logging.DEBUG):
+                if params:
+                    self._safe_log(logging.DEBUG, "Request params: %s", str(params))
+                if json_body:
+                    body_str = str(json_body)
+                    self._safe_log(logging.DEBUG, "Request body: %s", self._truncate_body(body_str))
+
+    def _log_request_headers(self, client: httpx.AsyncClient) -> None:
+        """Log request headers at DEBUG level (tokens masked by SensitiveDataFilter)."""
+        with contextlib.suppress(Exception):
+            if logger.isEnabledFor(logging.DEBUG):
+                self._safe_log(logging.DEBUG, "Request headers: %s", self._format_headers(client.headers))
+
+    def _log_response(self, response: httpx.Response, elapsed_ms: float) -> None:
+        """Log response details at INFO (summary) and DEBUG (full details)."""
+        with contextlib.suppress(Exception):
+            self._safe_log(logging.INFO, "Response: %d (%.1fms)", response.status_code, elapsed_ms)
+            if logger.isEnabledFor(logging.DEBUG):
+                self._safe_log(logging.DEBUG, "Response headers: %s", self._format_headers(response.headers))
+                content_type = response.headers.get("content-type", "")
+                if "application/octet-stream" in content_type or "application/zip" in content_type:
+                    content_length = response.headers.get("content-length", "unknown")
+                    self._safe_log(
+                        logging.DEBUG,
+                        "Response body: [binary, content-type=%s, size=%s]",
+                        content_type,
+                        content_length,
+                    )
+                else:
+                    self._safe_log(logging.DEBUG, "Response body: %s", self._truncate_body(response.text))
+
+    def _log_error(self, method: str, path: str, error: Exception) -> None:
+        """Log error context for failed requests."""
+        with contextlib.suppress(Exception):
+            self._safe_log(logging.DEBUG, "%s %s failed: %s: %s", method, path, type(error).__name__, str(error))
+
     async def _request_with_retry(
         self,
         method: str,
@@ -154,6 +217,10 @@ class GitLabHTTPClient:
         refreshed = False
         attempt = 0
 
+        # Log the request details once before the retry loop
+        self._log_request(method, path, params, json_body)
+        self._log_request_headers(client)
+
         while attempt < max_attempts:
             try:
                 self._safe_log(
@@ -165,12 +232,17 @@ class GitLabHTTPClient:
                     max_attempts,
                 )
 
+                start_time = time.monotonic()
                 response = await client.request(
                     method,
                     path,
                     params=params,
                     json=json_body,
                 )
+                elapsed_ms = (time.monotonic() - start_time) * 1000
+
+                # Log response summary and details
+                self._log_response(response, elapsed_ms)
 
                 # Handle rate limiting (429)
                 if response.status_code == 429 and self._retry_config.retry_on_429:
@@ -235,6 +307,7 @@ class GitLabHTTPClient:
 
             except httpx.ConnectTimeout as exc:
                 last_exception = exc
+                self._log_error(method, path, exc)
                 if attempt < self._retry_config.max_retries:
                     delay = self._get_backoff_delay(attempt)
                     self._safe_log(
@@ -253,6 +326,7 @@ class GitLabHTTPClient:
 
             except httpx.TimeoutException as exc:
                 last_exception = exc
+                self._log_error(method, path, exc)
                 if attempt < self._retry_config.max_retries:
                     delay = self._get_backoff_delay(attempt)
                     self._safe_log(
@@ -268,6 +342,7 @@ class GitLabHTTPClient:
                 raise TimeoutError() from exc
 
             except httpx.ConnectError as exc:
+                self._log_error(method, path, exc)
                 raise ConnectionError() from exc
 
             except (
@@ -282,6 +357,7 @@ class GitLabHTTPClient:
                 raise
 
             except httpx.HTTPError as exc:
+                self._log_error(method, path, exc)
                 raise ConnectionError(f"HTTP error communicating with GitLab: {type(exc).__name__}") from exc
 
         # Should not reach here, but just in case
@@ -384,13 +460,29 @@ class GitLabHTTPClient:
         Yields:
             An async iterator of byte chunks from the response body.
         """
+        self._log_request("GET", path, params or None, None)
         client = await self._ensure_client()
+        self._log_request_headers(client)
         try:
             async with client.stream(
                 "GET",
                 path,
                 params=params or None,
             ) as response:
+                # Log stream start without buffering the body
+                with contextlib.suppress(Exception):
+                    content_type = response.headers.get("content-type", "unknown")
+                    content_length = response.headers.get("content-length", "unknown")
+                    self._safe_log(
+                        logging.INFO,
+                        "Response: %d [stream, content-type=%s, content-length=%s]",
+                        response.status_code,
+                        content_type,
+                        content_length,
+                    )
+                    if logger.isEnabledFor(logging.DEBUG):
+                        self._safe_log(logging.DEBUG, "Response headers: %s", self._format_headers(response.headers))
+
                 if response.status_code == 401:
                     raise AuthenticationError()
                 if response.status_code == 403:
@@ -409,8 +501,10 @@ class GitLabHTTPClient:
                     response.raise_for_status()
                 yield response.aiter_bytes()
         except httpx.TimeoutException as exc:
+            self._log_error("GET", path, exc)
             raise TimeoutError() from exc
         except httpx.ConnectError as exc:
+            self._log_error("GET", path, exc)
             raise ConnectionError() from exc
         except (
             AuthenticationError,
@@ -423,4 +517,5 @@ class GitLabHTTPClient:
         ):
             raise
         except httpx.HTTPError as exc:
+            self._log_error("GET", path, exc)
             raise ConnectionError(f"HTTP error during streaming: {type(exc).__name__}") from exc

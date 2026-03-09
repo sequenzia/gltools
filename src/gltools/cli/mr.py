@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 from typing import Any
@@ -32,6 +33,8 @@ from gltools.client.exceptions import (
     TimeoutError as GitLabTimeoutError,
 )
 from gltools.models.output import CommandResult, DryRunResult, ErrorResult
+
+logger = logging.getLogger("gltools.cli.mr")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -76,6 +79,14 @@ async def _build_service(ctx: typer.Context, project: str | None = None) -> Any:
             "token": obj.get("token"),
             "output_format": obj.get("output_format"),
         },
+    )
+
+    logger.info(
+        "Config: host=%s, auth=%s, project=%s, profile=%s",
+        config.host,
+        config.auth_type,
+        project or config.default_project or "(auto-detect)",
+        config.profile,
     )
 
     token_refresher = _make_token_refresher(config) if config.auth_type == "oauth" and config.client_id else None

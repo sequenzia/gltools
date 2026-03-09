@@ -1,11 +1,21 @@
 """Tests for the main Typer CLI application."""
 
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from gltools import __version__
 from gltools.cli.app import app
+from gltools.logging import LOGGER_NAME
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+import pytest
 
 runner = CliRunner()
 
@@ -320,3 +330,248 @@ class TestTuiCommand:
             host="https://gitlab.example.com",
             token="tok",
         )
+
+
+class TestLoggingFlags:
+    """Verify --verbose, --debug, and --log-file global flags."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_logger(self) -> None:
+        """Ensure a clean gltools logger state before and after each test."""
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+        yield  # type: ignore[misc]
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+
+    def test_verbose_flag_sets_info_level(self) -> None:
+        result = runner.invoke(app, ["--verbose", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.INFO
+
+    def test_verbose_short_flag(self) -> None:
+        result = runner.invoke(app, ["-v", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.INFO
+
+    def test_debug_flag_sets_debug_level(self) -> None:
+        result = runner.invoke(app, ["--debug", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.DEBUG
+
+    def test_debug_overrides_verbose(self) -> None:
+        result = runner.invoke(app, ["--verbose", "--debug", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.DEBUG
+
+    def test_debug_overrides_verbose_reverse_order(self) -> None:
+        result = runner.invoke(app, ["--debug", "--verbose", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.DEBUG
+
+    def test_no_flags_defaults_to_warning(self) -> None:
+        result = runner.invoke(app, ["auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.WARNING
+
+    def test_verbose_flag_in_help(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--verbose" in result.output
+        assert "-v" in result.output
+
+    def test_debug_flag_in_help(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--debug" in result.output
+
+    def test_log_file_flag_in_help(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "--log-file" in result.output
+
+    def test_flags_available_on_subcommands(self) -> None:
+        """Flags are global and available before any subcommand."""
+        result = runner.invoke(app, ["--verbose", "mr"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.INFO
+
+        result = runner.invoke(app, ["--debug", "issue"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        assert logger.level == logging.DEBUG
+
+
+class TestLoggingCtxObj:
+    """Verify logging state is stored in ctx.obj for downstream access."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_logger(self) -> None:
+        """Ensure a clean gltools logger state before and after each test."""
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+        yield  # type: ignore[misc]
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+
+    def test_verbose_stored_in_ctx(self) -> None:
+        captured_ctx: dict = {}
+
+        @app.command("_test_verbose_ctx")
+        def _test_cmd(ctx: __import__("typer").Context) -> None:
+            captured_ctx.update(ctx.obj)
+
+        result = runner.invoke(app, ["--verbose", "_test_verbose_ctx"])
+        assert result.exit_code == 0
+        assert captured_ctx["verbose"] is True
+        assert captured_ctx["log_level"] == "INFO"
+        # Clean up registered command
+        app.registered_commands.pop()
+
+    def test_debug_stored_in_ctx(self) -> None:
+        captured_ctx: dict = {}
+
+        @app.command("_test_debug_ctx")
+        def _test_cmd(ctx: __import__("typer").Context) -> None:
+            captured_ctx.update(ctx.obj)
+
+        result = runner.invoke(app, ["--debug", "_test_debug_ctx"])
+        assert result.exit_code == 0
+        assert captured_ctx["debug"] is True
+        assert captured_ctx["log_level"] == "DEBUG"
+        app.registered_commands.pop()
+
+    def test_log_file_stored_in_ctx(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "test.log"
+        captured_ctx: dict = {}
+
+        @app.command("_test_logfile_ctx")
+        def _test_cmd(ctx: __import__("typer").Context) -> None:
+            captured_ctx.update(ctx.obj)
+
+        result = runner.invoke(app, ["--log-file", str(log_file), "_test_logfile_ctx"])
+        assert result.exit_code == 0
+        assert captured_ctx["log_file"] == str(log_file)
+        app.registered_commands.pop()
+
+    def test_no_log_file_stores_none(self) -> None:
+        captured_ctx: dict = {}
+
+        @app.command("_test_no_logfile_ctx")
+        def _test_cmd(ctx: __import__("typer").Context) -> None:
+            captured_ctx.update(ctx.obj)
+
+        result = runner.invoke(app, ["_test_no_logfile_ctx"])
+        assert result.exit_code == 0
+        assert captured_ctx["log_file"] is None
+        app.registered_commands.pop()
+
+
+class TestLogFileFlag:
+    """Verify --log-file flag creates a log file with output."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_logger(self) -> None:
+        """Ensure a clean gltools logger state before and after each test."""
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+        yield  # type: ignore[misc]
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+
+    def test_log_file_creates_file(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "output.log"
+        result = runner.invoke(app, ["--log-file", str(log_file), "--debug", "auth"])
+        assert result.exit_code == 0
+        # File handler should be set up
+        logger = logging.getLogger(LOGGER_NAME)
+        file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 1
+
+    def test_log_file_with_debug_sets_debug_handler(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "debug.log"
+        result = runner.invoke(app, ["--log-file", str(log_file), "--debug", "auth"])
+        assert result.exit_code == 0
+
+        logger = logging.getLogger(LOGGER_NAME)
+        file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+        assert len(file_handlers) == 1
+        # File handler should use JSON formatter
+        from gltools.logging import JSONFormatter
+
+        assert isinstance(file_handlers[0].formatter, JSONFormatter)
+        # Logger should be at DEBUG level
+        assert logger.level == logging.DEBUG
+
+    def test_log_file_nested_directory(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "nested" / "deep" / "output.log"
+        result = runner.invoke(app, ["--log-file", str(log_file), "auth"])
+        assert result.exit_code == 0
+        assert log_file.parent.exists()
+
+
+class TestLoggingEdgeCases:
+    """Edge cases for logging flags."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_logger(self) -> None:
+        """Ensure a clean gltools logger state before and after each test."""
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+        yield  # type: ignore[misc]
+        logger = logging.getLogger(LOGGER_NAME)
+        for h in logger.handlers[:]:
+            logger.removeHandler(h)
+            h.close()
+        logger.setLevel(logging.WARNING)
+
+    def test_quiet_and_verbose_together(self) -> None:
+        """--quiet suppresses CLI output, but logging still works."""
+        result = runner.invoke(app, ["--quiet", "--verbose", "auth"])
+        assert result.exit_code == 0
+        logger = logging.getLogger(LOGGER_NAME)
+        # Logging should still be at INFO despite --quiet
+        assert logger.level == logging.INFO
+
+    def test_invalid_log_file_path_exits_with_error(self, tmp_path: Path) -> None:
+        """Invalid --log-file path produces a clear error."""
+        # Create a read-only directory to prevent file creation
+        restricted = tmp_path / "restricted"
+        restricted.mkdir()
+        restricted.chmod(0o444)
+
+        log_file = restricted / "subdir" / "output.log"
+        result = runner.invoke(app, ["--log-file", str(log_file), "auth"])
+        assert result.exit_code == 1
+        assert "Error" in result.output or "Cannot" in result.output
+
+        # Cleanup
+        restricted.chmod(0o755)

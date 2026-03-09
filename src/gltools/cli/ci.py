@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,8 @@ from gltools.client.exceptions import (
 )
 from gltools.models.output import CommandResult, DryRunResult, ErrorResult
 
+logger = logging.getLogger("gltools.cli.ci")
+
 err_console = Console(stderr=True, force_terminal=None)
 
 
@@ -76,16 +79,29 @@ def _build_service(ctx: typer.Context) -> Any:
 
     # Resolve project
     project: str | None = config.default_project
+    project_source = "config"
     if project is None:
         remote_info = detect_gitlab_remote()
         if remote_info is not None:
             project = remote_info.project_path_encoded
+            project_source = "git remote"
+        else:
+            logger.debug("Git remote detection did not find a GitLab remote")
 
     if project is None:
         raise typer.BadParameter(
             "No project configured. Set 'default_project' in your config, "
             "run from a git repository with a GitLab remote, or pass --project explicitly."
         )
+
+    logger.info(
+        "Config: host=%s, auth=%s, project=%s (from %s), profile=%s",
+        config.host,
+        config.auth_type,
+        project,
+        project_source,
+        config.profile,
+    )
 
     service = CIService(
         project_id=project,

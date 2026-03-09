@@ -57,16 +57,21 @@ class IssueService:
         Raises:
             ProjectResolutionError: If no project can be resolved.
         """
+        logger.debug("Resolving project...")
         if self._explicit_project:
+            logger.debug("Project resolved: %s (from --project flag)", self._explicit_project)
             return self._explicit_project
 
         if self._config.default_project:
+            logger.debug("Project resolved: %s (from config)", self._config.default_project)
             return self._config.default_project
 
         remote_info = detect_gitlab_remote()
         if remote_info:
+            logger.debug("Project resolved: %s (from git remote)", remote_info.project_path)
             return remote_info.project_path
 
+        logger.debug("Project resolution failed: no project found from any source")
         raise ProjectResolutionError()
 
     def _encode_project(self, project: str) -> str:
@@ -110,9 +115,10 @@ class IssueService:
             Paginated response containing Issue models.
         """
         project = self._resolve_project()
+        logger.debug("Fetching issues...")
 
         if not all_pages:
-            return await self._client.issues.list(
+            result = await self._client.issues.list(
                 project,
                 state=state,
                 labels=labels,
@@ -123,6 +129,8 @@ class IssueService:
                 per_page=per_page,
                 page=page,
             )
+            logger.debug("Found %d issues", len(result.items))
+            return result
 
         all_items: list[Issue] = []
         current_page = 1
@@ -143,6 +151,7 @@ class IssueService:
                 break
             current_page = result.next_page
 
+        logger.debug("Found %d issues (all pages)", len(all_items))
         return PaginatedResponse[Issue](
             items=all_items,
             page=1,
@@ -165,9 +174,13 @@ class IssueService:
             NotFoundError: If the issue does not exist (including confidential 404s).
         """
         project = self._resolve_project()
+        logger.debug("Fetching issue #%d...", issue_iid)
         try:
-            return await self._client.issues.get(project, issue_iid)
+            issue = await self._client.issues.get(project, issue_iid)
+            logger.debug("Fetched issue #%d: %s", issue_iid, issue.title)
+            return issue
         except NotFoundError:
+            logger.debug("Issue #%d not found", issue_iid)
             raise NotFoundError(resource="Issue not found", path=f"issues/{issue_iid}") from None
 
     async def create_issue(
@@ -196,6 +209,7 @@ class IssueService:
             The created Issue model, or DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Creating issue: %s...", title)
 
         body: dict[str, Any] = {"title": title}
         if description is not None:
@@ -210,13 +224,14 @@ class IssueService:
             body["due_date"] = due_date
 
         if dry_run:
+            logger.debug("Dry-run: would POST to %s", self._issue_endpoint(project))
             return DryRunResult(
                 method="POST",
                 url=self._issue_endpoint(project),
                 body=body,
             )
 
-        return await self._client.issues.create(
+        issue = await self._client.issues.create(
             project,
             title=title,
             description=description,
@@ -225,6 +240,8 @@ class IssueService:
             milestone_id=milestone_id,
             due_date=due_date,
         )
+        logger.debug("Issue created: #%d", issue.iid)
+        return issue
 
     async def update_issue(
         self,
@@ -244,15 +261,19 @@ class IssueService:
             The updated Issue model, or DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Updating issue #%d (fields: %s)...", issue_iid, list(fields.keys()))
 
         if dry_run:
+            logger.debug("Dry-run: would PUT to %s", self._issue_endpoint(project, issue_iid))
             return DryRunResult(
                 method="PUT",
                 url=self._issue_endpoint(project, issue_iid),
                 body=fields if fields else None,
             )
 
-        return await self._client.issues.update(project, issue_iid, **fields)
+        issue = await self._client.issues.update(project, issue_iid, **fields)
+        logger.debug("Issue #%d updated", issue_iid)
+        return issue
 
     async def close_issue(
         self,
@@ -270,15 +291,19 @@ class IssueService:
             The updated Issue model, or DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Closing issue #%d...", issue_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would close issue #%d", issue_iid)
             return DryRunResult(
                 method="PUT",
                 url=self._issue_endpoint(project, issue_iid),
                 body={"state_event": "close"},
             )
 
-        return await self._client.issues.close(project, issue_iid)
+        issue = await self._client.issues.close(project, issue_iid)
+        logger.debug("Issue #%d closed", issue_iid)
+        return issue
 
     async def reopen_issue(
         self,
@@ -296,15 +321,19 @@ class IssueService:
             The updated Issue model, or DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Reopening issue #%d...", issue_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would reopen issue #%d", issue_iid)
             return DryRunResult(
                 method="PUT",
                 url=self._issue_endpoint(project, issue_iid),
                 body={"state_event": "reopen"},
             )
 
-        return await self._client.issues.reopen(project, issue_iid)
+        issue = await self._client.issues.reopen(project, issue_iid)
+        logger.debug("Issue #%d reopened", issue_iid)
+        return issue
 
     async def add_note(
         self,
@@ -324,12 +353,16 @@ class IssueService:
             The created Note model, or DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Adding note to issue #%d...", issue_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would POST note to issue #%d", issue_iid)
             return DryRunResult(
                 method="POST",
                 url=f"{self._issue_endpoint(project, issue_iid)}/notes",
                 body={"body": body},
             )
 
-        return await self._client.issues.create_note(project, issue_iid, body)
+        note = await self._client.issues.create_note(project, issue_iid, body)
+        logger.debug("Note added to issue #%d", issue_iid)
+        return note

@@ -66,16 +66,21 @@ class MergeRequestService:
         Raises:
             ProjectResolutionError: If no project can be resolved.
         """
+        logger.debug("Resolving project...")
         if self._explicit_project:
+            logger.debug("Project resolved: %s (from --project flag)", self._explicit_project)
             return self._explicit_project
 
         if self._config.default_project:
+            logger.debug("Project resolved: %s (from config)", self._config.default_project)
             return self._config.default_project
 
         remote_info = detect_gitlab_remote()
         if remote_info:
+            logger.debug("Project resolved: %s (from git remote)", remote_info.project_path)
             return remote_info.project_path
 
+        logger.debug("Project resolution failed: no project found from any source")
         raise ProjectResolutionError()
 
     def _encode_project(self, project: str) -> str:
@@ -117,9 +122,10 @@ class MergeRequestService:
             Paginated response containing merge requests.
         """
         project = self._resolve_project()
+        logger.debug("Fetching merge requests...")
 
         if not all_pages:
-            return await self._client.merge_requests.list(
+            result = await self._client.merge_requests.list(
                 project,
                 state=state,
                 labels=labels,
@@ -129,6 +135,8 @@ class MergeRequestService:
                 per_page=per_page,
                 page=page,
             )
+            logger.debug("Found %d merge requests", len(result.items))
+            return result
 
         all_items: list[MergeRequest] = []
         current_page = 1
@@ -148,6 +156,7 @@ class MergeRequestService:
                 break
             current_page = result.next_page
 
+        logger.debug("Found %d merge requests (all pages)", len(all_items))
         return PaginatedResponse[MergeRequest](
             items=all_items,
             page=1,
@@ -167,7 +176,10 @@ class MergeRequestService:
             The merge request details.
         """
         project = self._resolve_project()
-        return await self._client.merge_requests.get(project, mr_iid)
+        logger.debug("Fetching merge request !%d...", mr_iid)
+        mr = await self._client.merge_requests.get(project, mr_iid)
+        logger.debug("Fetched MR !%d: %s", mr_iid, mr.title)
+        return mr
 
     async def create_mr(
         self,
@@ -195,6 +207,7 @@ class MergeRequestService:
             The created merge request, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Creating merge request: %s (%s -> %s)...", title, source_branch, target_branch)
 
         body: dict[str, Any] = {
             "title": title,
@@ -209,13 +222,14 @@ class MergeRequestService:
             body["assignee_ids"] = assignees
 
         if dry_run:
+            logger.debug("Dry-run: would POST to %s", self._mr_endpoint(project))
             return DryRunResult(
                 method="POST",
                 url=self._mr_endpoint(project),
                 body=body,
             )
 
-        return await self._client.merge_requests.create(
+        mr = await self._client.merge_requests.create(
             project,
             title=title,
             source_branch=source_branch,
@@ -224,6 +238,8 @@ class MergeRequestService:
             labels=labels,
             assignee_ids=assignees,
         )
+        logger.debug("MR created: !%d", mr.iid)
+        return mr
 
     async def update_mr(
         self,
@@ -243,15 +259,19 @@ class MergeRequestService:
             The updated merge request, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Updating MR !%d (fields: %s)...", mr_iid, list(fields.keys()))
 
         if dry_run:
+            logger.debug("Dry-run: would PUT to %s", self._mr_endpoint(project, mr_iid))
             return DryRunResult(
                 method="PUT",
                 url=self._mr_endpoint(project, mr_iid),
                 body=fields if fields else None,
             )
 
-        return await self._client.merge_requests.update(project, mr_iid, **fields)
+        mr = await self._client.merge_requests.update(project, mr_iid, **fields)
+        logger.debug("MR !%d updated", mr_iid)
+        return mr
 
     async def merge_mr(
         self,
@@ -275,6 +295,7 @@ class MergeRequestService:
             The merged merge request, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Merging MR !%d (squash=%s, delete_branch=%s)...", mr_iid, squash, delete_branch)
 
         body: dict[str, Any] = {}
         if squash:
@@ -285,18 +306,21 @@ class MergeRequestService:
             body["merge_when_pipeline_succeeds"] = False
 
         if dry_run:
+            logger.debug("Dry-run: would PUT to %s/merge", self._mr_endpoint(project, mr_iid))
             return DryRunResult(
                 method="PUT",
                 url=f"{self._mr_endpoint(project, mr_iid)}/merge",
                 body=body if body else None,
             )
 
-        return await self._client.merge_requests.merge(
+        mr = await self._client.merge_requests.merge(
             project,
             mr_iid,
             squash=squash,
             delete_source_branch=delete_branch,
         )
+        logger.debug("MR !%d merged", mr_iid)
+        return mr
 
     async def approve_mr(
         self,
@@ -314,8 +338,10 @@ class MergeRequestService:
             None on success, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Approving MR !%d...", mr_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would POST to %s/approve", self._mr_endpoint(project, mr_iid))
             return DryRunResult(
                 method="POST",
                 url=f"{self._mr_endpoint(project, mr_iid)}/approve",
@@ -323,6 +349,7 @@ class MergeRequestService:
             )
 
         await self._client.merge_requests.approve(project, mr_iid)
+        logger.debug("MR !%d approved", mr_iid)
         return None
 
     async def get_diff(self, mr_iid: int) -> list[DiffFile]:
@@ -335,7 +362,10 @@ class MergeRequestService:
             List of diff files.
         """
         project = self._resolve_project()
-        return await self._client.merge_requests.diff(project, mr_iid)
+        logger.debug("Fetching diff for MR !%d...", mr_iid)
+        diffs = await self._client.merge_requests.diff(project, mr_iid)
+        logger.debug("Fetched %d diff files for MR !%d", len(diffs), mr_iid)
+        return diffs
 
     async def add_note(
         self,
@@ -355,15 +385,19 @@ class MergeRequestService:
             The created note, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Adding note to MR !%d...", mr_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would POST note to MR !%d", mr_iid)
             return DryRunResult(
                 method="POST",
                 url=f"{self._mr_endpoint(project, mr_iid)}/notes",
                 body={"body": body},
             )
 
-        return await self._client.merge_requests.create_note(project, mr_iid, body)
+        note = await self._client.merge_requests.create_note(project, mr_iid, body)
+        logger.debug("Note added to MR !%d", mr_iid)
+        return note
 
     async def close_mr(
         self,
@@ -381,17 +415,21 @@ class MergeRequestService:
             The closed merge request, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Closing MR !%d...", mr_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would close MR !%d", mr_iid)
             return DryRunResult(
                 method="PUT",
                 url=self._mr_endpoint(project, mr_iid),
                 body={"state_event": "close"},
             )
 
-        return await self._client.merge_requests.update(
+        mr = await self._client.merge_requests.update(
             project, mr_iid, state_event="close"
         )
+        logger.debug("MR !%d closed", mr_iid)
+        return mr
 
     async def reopen_mr(
         self,
@@ -409,14 +447,18 @@ class MergeRequestService:
             The reopened merge request, or a DryRunResult if dry_run is True.
         """
         project = self._resolve_project()
+        logger.debug("Reopening MR !%d...", mr_iid)
 
         if dry_run:
+            logger.debug("Dry-run: would reopen MR !%d", mr_iid)
             return DryRunResult(
                 method="PUT",
                 url=self._mr_endpoint(project, mr_iid),
                 body={"state_event": "reopen"},
             )
 
-        return await self._client.merge_requests.update(
+        mr = await self._client.merge_requests.update(
             project, mr_iid, state_event="reopen"
         )
+        logger.debug("MR !%d reopened", mr_iid)
+        return mr

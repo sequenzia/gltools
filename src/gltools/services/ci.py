@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from gltools.models.output import DryRunResult, PaginatedResponse
 from gltools.models.pipeline import Pipeline
+
+logger = logging.getLogger("gltools.services.ci")
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -91,7 +94,9 @@ class CIService:
             NoPipelineError: If no pipeline is found.
             ValueError: If ref cannot be determined.
         """
+        logger.debug("Getting pipeline status...")
         if mr_iid is not None:
+            logger.debug("Resolving pipeline from MR !%d", mr_iid)
             return await self._get_pipeline_from_mr(mr_iid)
 
         if ref is None:
@@ -100,19 +105,24 @@ class CIService:
                 raise ValueError(
                     "Cannot determine current branch. Specify --ref or run from a git repository."
                 )
+            logger.debug("Resolved ref from current branch: %s", ref)
 
+        logger.debug("Fetching latest pipeline for ref '%s'...", ref)
         result = await self._pipelines.list(self._project_id, ref=ref, per_page=1, page=1)
         if not result.items:
             raise NoPipelineError(ref=ref)
 
         pipeline = result.items[0]
+        logger.debug("Found pipeline #%d (status: %s)", pipeline.id, pipeline.status)
         return await self._pipelines.get(self._project_id, pipeline.id)
 
     async def _get_pipeline_from_mr(self, mr_iid: int) -> Pipeline:
         """Resolve the pipeline attached to a merge request."""
         mr = await self._mrs.get(self._project_id, mr_iid)
         if mr.pipeline is None:
+            logger.debug("MR !%d has no pipeline attached", mr_iid)
             raise NoPipelineError(mr_iid=mr_iid)
+        logger.debug("MR !%d has pipeline #%d", mr_iid, mr.pipeline.id)
         return await self._pipelines.get(self._project_id, mr.pipeline.id)
 
     async def list_pipelines(
@@ -138,8 +148,9 @@ class CIService:
         Returns:
             Paginated response of pipelines.
         """
+        logger.debug("Fetching pipelines...")
         if not all_pages:
-            return await self._pipelines.list(
+            result = await self._pipelines.list(
                 self._project_id,
                 status=status,
                 ref=ref,
@@ -147,6 +158,8 @@ class CIService:
                 per_page=per_page,
                 page=page,
             )
+            logger.debug("Found %d pipelines", len(result.items))
+            return result
 
         all_items: list[Pipeline] = []
         current_page = 1
@@ -164,6 +177,7 @@ class CIService:
                 break
             current_page = result.next_page
 
+        logger.debug("Found %d pipelines (all pages)", len(all_items))
         return PaginatedResponse[Pipeline](
             items=all_items,
             page=1,
@@ -197,15 +211,20 @@ class CIService:
                 raise ValueError(
                     "Cannot determine current branch. Specify --ref or run from a git repository."
                 )
+            logger.debug("Resolved ref from current branch: %s", ref)
 
+        logger.debug("Triggering pipeline for ref '%s'...", ref)
         if dry_run:
+            logger.debug("Dry-run: would POST pipeline for ref '%s'", ref)
             return DryRunResult(
                 method="POST",
                 url=f"/projects/{self._project_id}/pipeline",
                 body={"ref": ref},
             )
 
-        return await self._pipelines.create(self._project_id, ref=ref)
+        pipeline = await self._pipelines.create(self._project_id, ref=ref)
+        logger.debug("Pipeline #%d triggered for ref '%s'", pipeline.id, ref)
+        return pipeline
 
     async def retry_pipeline(
         self,
@@ -222,13 +241,17 @@ class CIService:
         Returns:
             The retried Pipeline, or DryRunResult if dry_run is True.
         """
+        logger.debug("Retrying pipeline #%d...", pipeline_id)
         if dry_run:
+            logger.debug("Dry-run: would retry pipeline #%d", pipeline_id)
             return DryRunResult(
                 method="POST",
                 url=f"/projects/{self._project_id}/pipelines/{pipeline_id}/retry",
             )
 
-        return await self._pipelines.retry(self._project_id, pipeline_id)
+        pipeline = await self._pipelines.retry(self._project_id, pipeline_id)
+        logger.debug("Pipeline #%d retried", pipeline_id)
+        return pipeline
 
     async def cancel_pipeline(
         self,
@@ -245,13 +268,17 @@ class CIService:
         Returns:
             The cancelled Pipeline, or DryRunResult if dry_run is True.
         """
+        logger.debug("Cancelling pipeline #%d...", pipeline_id)
         if dry_run:
+            logger.debug("Dry-run: would cancel pipeline #%d", pipeline_id)
             return DryRunResult(
                 method="POST",
                 url=f"/projects/{self._project_id}/pipelines/{pipeline_id}/cancel",
             )
 
-        return await self._pipelines.cancel(self._project_id, pipeline_id)
+        pipeline = await self._pipelines.cancel(self._project_id, pipeline_id)
+        logger.debug("Pipeline #%d cancelled", pipeline_id)
+        return pipeline
 
     async def list_jobs(self, pipeline_id: int) -> list[Job]:
         """List jobs in a pipeline.
@@ -262,7 +289,10 @@ class CIService:
         Returns:
             List of jobs in the pipeline.
         """
-        return await self._jobs.list(self._project_id, pipeline_id)
+        logger.debug("Fetching jobs for pipeline #%d...", pipeline_id)
+        jobs = await self._jobs.list(self._project_id, pipeline_id)
+        logger.debug("Found %d jobs for pipeline #%d", len(jobs), pipeline_id)
+        return jobs
 
     async def get_logs(
         self,
@@ -282,6 +312,7 @@ class CIService:
         Yields:
             String chunks (or lines when tail is used) from the job log.
         """
+        logger.debug("Streaming logs for job #%d (tail=%s)...", job_id, tail)
         if tail is not None:
             async for line in self._get_tail_logs(job_id, tail):
                 yield line
@@ -333,16 +364,19 @@ class CIService:
         Returns:
             Path if written to file, or bytes if no output_path.
         """
+        logger.debug("Downloading artifacts for job #%d...", job_id)
         if output_path is not None:
             path = Path(output_path)
             async with self._jobs.artifacts(self._project_id, job_id) as stream:
                 with path.open("wb") as f:
                     async for chunk in stream:
                         f.write(chunk)
+            logger.debug("Artifacts saved to %s", path)
             return path
 
         chunks: list[bytes] = []
         async with self._jobs.artifacts(self._project_id, job_id) as stream:
             async for chunk in stream:
                 chunks.append(chunk)
+        logger.debug("Artifacts downloaded (%d bytes)", sum(len(c) for c in chunks))
         return b"".join(chunks)
