@@ -5,7 +5,7 @@ Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output f
 
 ## Tech Stack
 - **Python 3.12+**, src layout (`src/gltools/`), PEP 695 generics, `X | Y` union syntax
-- **Build**: Hatch (hatchling backend), UV for deps
+- **Build**: Hatch (hatchling backend), UV for deps. Version is dynamic (`dynamic = ["version"]` in pyproject.toml, read from `src/gltools/__init__.py`)
 - **CLI**: Typer with Rich formatting
 - **TUI**: Textual (widget-as-screen pattern, not native Screen stack)
 - **HTTP**: httpx (async), respx for mocking
@@ -14,6 +14,7 @@ Python CLI + TUI for GitLab, supporting MR/Issue/CI workflows with JSON output f
 - **Auth**: PAT + OAuth2 (Authorization Code + PKCE, Device Grant); keyring with file fallback (600 perms)
 - **Lint**: Ruff (line-length 120, py312 target)
 - **Test**: pytest, pytest-asyncio (auto mode), respx
+- **Changelog**: git-cliff (config: `cliff.toml`), Conventional Commits → Keep a Changelog format
 
 ## Key Commands
 ```bash
@@ -22,6 +23,10 @@ uv run pytest                          # Run tests
 uv run ruff check src/ tests/          # Lint
 uv run ruff format src/ tests/         # Format
 uv run hatch build                     # Build wheel/sdist
+uv run hatch version                   # Show current version
+uv run hatch version patch             # Bump patch (0.1.0 → 0.1.1)
+git-cliff --unreleased                 # Preview unreleased changelog
+git-cliff -o CHANGELOG.md             # Regenerate changelog
 gltools --help                         # CLI help
 ```
 
@@ -83,6 +88,8 @@ CLI/TUI → Services → Client (GitLabClient facade → Managers) → GitLabHTT
 - **Logging**: `setup_logging()` called from `main()` callback; `--verbose` (INFO), `--debug` (DEBUG), `--log-file` (JSON file). Default WARNING (silent). `SensitiveDataFilter` applied at handler level masks all tokens. Services log execution trace at DEBUG.
 - **Doctor command**: `gltools doctor` runs 7 check types. `CheckResult` dataclass with `category` field for grouped reporting. `DoctorReport` aggregates results. Standalone check functions for testability.
 - **Token masking**: `mask_sensitive_data()` in `logging.py` is a superset of `_mask_token()` in `client/exceptions.py`. Both kept for backward compatibility.
+- **Release workflow**: `.github/workflows/release.yml` triggers on `v*` tag push. Pipeline: lint → test → check-version → build → publish (PyPI via OIDC Trusted Publisher) → github-release (changelog excerpt + assets). Uses `astral-sh/setup-uv@v4`, `pypa/gh-action-pypi-publish@release/v1`, `softprops/action-gh-release@v2`.
+- **Release procedure**: bump version (`hatch version patch/minor/major`) → commit → tag (`git tag v{version}`) → push tag. See `CONTRIBUTING.md` for full procedure.
 
 ## Known Inconsistencies
 - **CI layer**: `CIService` takes `project_id` directly (resolved in CLI) unlike MR/Issue services. CI lacks `--project` flag. CI uses inline `asyncio.run()` instead of `@async_command`.

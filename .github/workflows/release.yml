@@ -1,0 +1,251 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run ruff check
+        run: uv run ruff check src/ tests/
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests
+        run: uv run pytest
+
+  check-version:
+    name: Check tag-version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract tag version
+        id: tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Tag version: ${TAG_VERSION}"
+
+      - name: Extract package version
+        id: package
+        run: |
+          PACKAGE_VERSION=$(python -c 'import re; f=open("src/gltools/__init__.py").read(); m=re.search(r"^__version__\s*=\s*\"(.+?)\"", f, re.MULTILINE); print(m.group(1) if m else "")')
+          echo "version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Package version: ${PACKAGE_VERSION}"
+
+      - name: Verify versions match
+        run: |
+          TAG_VERSION="${{ steps.tag.outputs.version }}"
+          PACKAGE_VERSION="${{ steps.package.outputs.version }}"
+          if [ "${TAG_VERSION}" != "${PACKAGE_VERSION}" ]; then
+            echo "::error::Version mismatch: git tag 'v${TAG_VERSION}' does not match __version__ '${PACKAGE_VERSION}' in src/gltools/__init__.py"
+            echo ""
+            echo "The git tag version (${TAG_VERSION}) must match the __version__ variable"
+            echo "in src/gltools/__init__.py (${PACKAGE_VERSION})."
+            echo ""
+            echo "To fix this, either:"
+            echo "  1. Update __version__ in src/gltools/__init__.py to '${TAG_VERSION}'"
+            echo "  2. Delete the tag and create a new one matching the package version: v${PACKAGE_VERSION}"
+            exit 1
+          fi
+          echo "Versions match: v${TAG_VERSION}"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test, check-version]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Build sdist and wheel
+        run: uv run hatch build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+      - name: List build artifacts
+        run: ls -la dist/
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build]
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Verify artifacts exist
+        run: |
+          if [ ! -d dist ] || [ -z "$(ls -A dist/)" ]; then
+            echo "::error::No build artifacts found in dist/ directory"
+            exit 1
+          fi
+          echo "Found artifacts:"
+          ls -la dist/
+          SDIST_COUNT=$(ls dist/*.tar.gz 2>/dev/null | wc -l)
+          WHEEL_COUNT=$(ls dist/*.whl 2>/dev/null | wc -l)
+          if [ "$SDIST_COUNT" -eq 0 ]; then
+            echo "::error::No sdist (.tar.gz) found in dist/"
+            exit 1
+          fi
+          if [ "$WHEEL_COUNT" -eq 0 ]; then
+            echo "::error::No wheel (.whl) found in dist/"
+            exit 1
+          fi
+          echo "Found $SDIST_COUNT sdist(s) and $WHEEL_COUNT wheel(s)"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [publish]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Current version: ${TAG_VERSION}"
+
+      - name: Extract changelog for version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the changelog section between ## [VERSION] and the next ## [
+          # Uses sed to capture lines between the matching version header and the next version header
+          CHANGELOG=$(sed -n "/^## \[${VERSION}\]/,/^## \[/{/^## \[${VERSION}\]/d;/^## \[/d;p;}" CHANGELOG.md)
+
+          if [ -z "$CHANGELOG" ]; then
+            echo "::warning::Changelog section for version ${VERSION} not found, using auto-generated notes"
+            echo "use_auto_notes=true" >> "$GITHUB_OUTPUT"
+            echo "body=" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_auto_notes=false" >> "$GITHUB_OUTPUT"
+            # Write body to a file to preserve multiline content
+            echo "$CHANGELOG" > /tmp/release_notes.md
+            echo "body_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build diff link
+        id: diff
+        run: |
+          CURRENT_TAG="${{ github.ref_name }}"
+          # Find the previous tag by version sort, excluding the current tag
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1)
+
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            DIFF_LINK="${REPO_URL}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}"
+            echo "link=${DIFF_LINK}" >> "$GITHUB_OUTPUT"
+            echo "Diff link: ${DIFF_LINK}"
+          else
+            # First release — link to the tag itself (all commits up to this point)
+            DIFF_LINK="${REPO_URL}/commits/${CURRENT_TAG}"
+            echo "link=${DIFF_LINK}" >> "$GITHUB_OUTPUT"
+            echo "First release, linking to all commits: ${DIFF_LINK}"
+          fi
+
+      - name: Compose release body
+        id: release_body
+        run: |
+          RELEASE_BODY_FILE="/tmp/final_release_notes.md"
+          if [ "${{ steps.changelog.outputs.use_auto_notes }}" = "true" ]; then
+            echo "" > "$RELEASE_BODY_FILE"
+          else
+            cp "${{ steps.changelog.outputs.body_file }}" "$RELEASE_BODY_FILE"
+          fi
+          # Append diff link
+          echo "" >> "$RELEASE_BODY_FILE"
+          echo "---" >> "$RELEASE_BODY_FILE"
+          echo "" >> "$RELEASE_BODY_FILE"
+          echo "**Full Changelog**: ${{ steps.diff.outputs.link }}" >> "$RELEASE_BODY_FILE"
+
+          echo "Release body:"
+          cat "$RELEASE_BODY_FILE"
+          echo "body_file=${RELEASE_BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.release_body.outputs.body_file }}
+          generate_release_notes: ${{ steps.changelog.outputs.use_auto_notes }}
+          files: dist/*
+          fail_on_unmatched_files: true
