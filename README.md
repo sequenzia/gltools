@@ -736,6 +736,61 @@ flowchart TD
 uv run gltools --help
 ```
 
+## Releasing
+
+Releases are automated via GitHub Actions. Pushing a `v*` tag triggers the full pipeline.
+
+### Quick Release
+
+```bash
+# 1. Bump version (patch/minor/major)
+hatch version patch
+
+# 2. Regenerate changelog
+git-cliff --tag "v$(hatch version)" -o CHANGELOG.md
+
+# 3. Commit and tag
+git add src/gltools/__init__.py CHANGELOG.md
+git commit -m "chore(release): prepare v$(hatch version)"
+git tag "v$(hatch version)"
+
+# 4. Push (triggers CI/CD)
+git push origin main --follow-tags
+```
+
+### What Happens Automatically
+
+When a `v*` tag is pushed, the [release workflow](.github/workflows/release.yml) runs:
+
+1. **Lint** — `ruff check` on source and tests
+2. **Test** — `pytest` full test suite
+3. **Version check** — verifies git tag matches `__version__` in `src/gltools/__init__.py`
+4. **Build** — `hatch build` produces sdist and wheel
+5. **Publish** — uploads to PyPI via [Trusted Publisher](https://docs.pypi.org/trusted-publishers/) (OIDC, no tokens needed)
+6. **GitHub Release** — creates a release with changelog notes and build artifacts attached
+
+### Version Management
+
+The version source of truth is `__version__` in `src/gltools/__init__.py`, managed by [Hatch](https://hatch.pypa.io/):
+
+```bash
+hatch version          # Show current version
+hatch version patch    # 0.1.0 → 0.1.1
+hatch version minor    # 0.1.0 → 0.2.0
+hatch version major    # 0.1.0 → 1.0.0
+```
+
+### Changelog
+
+The changelog is generated from [Conventional Commits](https://www.conventionalcommits.org/) using [git-cliff](https://git-cliff.org/) (config: `cliff.toml`):
+
+```bash
+git-cliff --unreleased    # Preview unreleased changes
+git-cliff -o CHANGELOG.md # Regenerate full changelog
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full details on commit conventions, PyPI Trusted Publisher setup, and the release procedure.
+
 ## License
 
 MIT
